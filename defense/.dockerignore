@@ -1,0 +1,14 @@
+# Never send runtime state or secrets to the image builder (D10 gate: no keys, DBs or config.toml in images)
+data/
+spool/
+config.toml
+*.key
+*.pub
+*.db
+*.db-wal
+*.db-shm
+.venv/
+.git/
+**/__pycache__/
+.pytest_cache/
+CLAUDE.local.md

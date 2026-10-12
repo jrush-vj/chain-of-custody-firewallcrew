@@ -1,0 +1,4 @@
+# Copy to data/witness_nodes.toml (set as [witness] nodes_file). The witness trusts only these keys.
+# One line per node: node_id = "<hex public key>", the contents of that node's public_key_path file.
+[nodes]
+node-1 = "<64 hex characters: the contents of data/node1.pub>"

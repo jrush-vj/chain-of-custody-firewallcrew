@@ -1,0 +1,12 @@
+{"source":"app","ts":"2026-10-12T09:15:30Z","actor":"asha","event_type":"login_success","details":{"ip":"10.0.0.5"}}
+{"source":"db","ts":"2026-10-12T09:16:02Z","actor":"asha","event_type":"transaction_created","details":{"txn_id":"1001","amount":"1250.00","currency":"INR","from_account":"Checking","to_account":"Groceries"}}
+{"source":"db","ts":"2026-10-12T09:17:40Z","actor":"asha","event_type":"transaction_created","details":{"txn_id":"1002","amount":"4999.00","currency":"INR","from_account":"Checking","to_account":"Electronics"}}
+{"source":"app","ts":"2026-10-12T09:18:11Z","actor":"unknown","event_type":"login_failed","details":{"ip":"10.0.0.77"}}
+{"source":"host","ts":"2026-10-12T09:18:45Z","actor":"unknown","event_type":"http_request","details":{"method":"GET","path":"/transactions","status":"200"}}
+{"source":"db","ts":"2026-10-12T09:20:03Z","actor":"asha","event_type":"transaction_updated","details":{"txn_id":"1002","field":"amount","old":"4999.00","new":"499.00"}}
+{"source":"db","ts":"2026-10-12T09:21:30Z","actor":"asha","event_type":"transaction_deleted","details":{"txn_id":"1001"}}
+{"source":"app","ts":"2026-10-12T09:22:10Z","actor":"ravi","event_type":"login_success","details":{"ip":"10.0.0.9"}}
+{"source":"db","ts":"2026-10-12T09:23:55Z","actor":"ravi","event_type":"account_created","details":{"account":"Travel Fund","type":"asset"}}
+{"source":"db","ts":"2026-10-12T09:25:20Z","actor":"ravi","event_type":"transaction_created","details":{"txn_id":"1003","amount":"15000.00","currency":"INR","from_account":"Checking","to_account":"Travel Fund"}}
+{"source":"host","ts":"2026-10-12T09:26:02Z","actor":"unknown","event_type":"http_request","details":{"method":"POST","path":"/api/v1/transactions","status":"200"}}
+{"source":"db","ts":"2026-10-12T09:27:48Z","actor":"ravi","event_type":"transaction_created","details":{"txn_id":"1004","amount":"320.50","currency":"INR","from_account":"Checking","to_account":"Transport"}}

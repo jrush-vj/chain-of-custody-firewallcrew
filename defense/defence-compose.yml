@@ -1,0 +1,50 @@
+# Standalone Defence Compose specification (base model)
+# Any platform's compose file can include or reference this unchanged.
+# Per platform: the spool folder (SPOOL_DIR), the profile (config.toml) and data/witness_nodes.toml.
+# Keep the profile's paths relative and under spool/ and data/ so they mean the same on the host and in /app.
+# Demo only: the witness runs on the same host here. In real use it runs on a machine the platform admin cannot reach.
+
+services:
+  sidecar:
+    build:
+      context: .
+      dockerfile: sidecar/Dockerfile
+    image: chain-of-custody-sidecar:latest
+    container_name: chain-of-custody-sidecar
+    restart: unless-stopped
+    volumes:
+      # Spool folder, read-only, at the path the profile's spool_path ("spool/...") resolves to
+      - ${SPOOL_DIR:-./spool}:/app/spool:ro
+      # Sidecar DB and node keys persist in data/ on the host (the host verifier reads them)
+      - ./data:/app/data
+      # Platform profile configuration
+      - ./config.toml:/app/config.toml:ro
+    depends_on:
+      - witness
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Inside Compose the witness is reached by service name, not localhost
+    command: ["python", "-m", "sidecar.main", "--config", "config.toml", "--witness-url", "http://witness:8800"]
+
+  witness:
+    build:
+      context: .
+      dockerfile: witness/Dockerfile
+    image: chain-of-custody-witness:latest
+    container_name: chain-of-custody-witness
+    restart: unless-stopped
+    ports:
+      - "8800:8800"
+    volumes:
+      # Witness DB lives only in its own named volume, which the sidecar never mounts
+      - witness-data:/app/data
+      # Configuration and the trusted node keys (read-only, outside the witness volume)
+      - ./config.toml:/app/config.toml:ro
+      - ./data/witness_nodes.toml:/etc/coc/witness_nodes.toml:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: ["python", "-m", "witness.app", "--config", "config.toml", "--host", "0.0.0.0",
+              "--nodes-file", "/etc/coc/witness_nodes.toml"]
+
+volumes:
+  witness-data:

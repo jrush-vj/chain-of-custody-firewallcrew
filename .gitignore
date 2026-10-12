@@ -1,0 +1,45 @@
+# Root environment and secrets
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# Banking runtime data
+banking-system/**/data/
+banking-system/**/logs/
+banking-system/**/spool/
+banking-system/**/ssl/*.pem
+
+# Defense runtime data
+defense/config.toml
+defense/data/
+defense/spool/*.jsonl
+defense/spool/.*-offset
+defense/*.db
+
+# Build output
+banking-system/frontend/build/
+banking-system/frontend/coverage/
+dist/
+build/
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

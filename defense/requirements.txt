@@ -1,0 +1,8 @@
+# Exact versions: the 146+ tests pass on these. Upgrade on purpose, then re-run the tests.
+cryptography==50.0.2
+fastapi==0.143.0
+starlette==1.7.0
+pydantic==2.14.0
+uvicorn==0.54.0
+httpx==0.28.1
+pytest==9.1.1
