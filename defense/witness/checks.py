@@ -11,6 +11,7 @@ from witness import store
 
 HB_FIELDS = ("node_id", "hb_counter", "head_seq", "head_hash", "tree_size", "ts", "signature")
 CP_FIELDS = ("node_id", "tree_size", "head_seq", "head_hash", "root_hash", "ts", "signature")
+TA_FIELDS = ("node_id", "code", "detail", "ts", "signature")
 INT_FIELDS = ("hb_counter", "head_seq", "tree_size")
 HASH_FIELDS = ("head_hash", "root_hash")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -55,10 +56,11 @@ def payload_errors(body: Any, fields: tuple[str, ...]) -> list[str]:
     is_heartbeat = "hb_counter" in fields
     if is_heartbeat and body["hb_counter"] < 1:
         errors.append("'hb_counter' starts at 1")
-    if body["tree_size"] < (0 if is_heartbeat else 1):
-        errors.append("'tree_size' is too small")
-    if body["head_seq"] != body["tree_size"] - 1:
-        errors.append("'head_seq' must equal tree_size - 1")
+    if "tree_size" in fields:
+        if body["tree_size"] < (0 if is_heartbeat else 1):
+            errors.append("'tree_size' is too small")
+        if body["head_seq"] != body["tree_size"] - 1:
+            errors.append("'head_seq' must equal tree_size - 1")
     return errors
 
 

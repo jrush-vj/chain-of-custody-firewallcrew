@@ -36,7 +36,7 @@
       <thead><tr><th>Time</th><th>Code</th><th>Details</th></tr></thead>
       <tbody id="alerts"><tr><td colspan="3">Loading...</td></tr></tbody>
     </table>
-    <p class="muted">Updates every 5 seconds. A tampered local spool normally appears as <code>SILENCE</code> after heartbeats stop.</p>
+    <p class="muted">Updates every 5 seconds. The sidecar reports exact changed fields when it can read both values; <code>SILENCE</code> is the fallback if it stops before sending the tamper alert.</p>
   </main>
   <script>
     const nodeId = "node-1";

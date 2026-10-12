@@ -157,6 +157,21 @@ def create_app(
             record(body["node_id"], alerts, epoch)
         return {"status": "stored", "alerts": alerts} if alerts else {"status": "stored"}
 
+    @app.post("/tamper-alert")
+    def post_tamper_alert(body: Any = Body(...)) -> Any:
+        """Accept a signed local spool-integrity alert from a trusted sidecar."""
+        errors = checks.payload_errors(body, checks.TA_FIELDS)
+        if errors:
+            return JSONResponse({"status": "invalid", "errors": errors}, status_code=422)
+        epoch = now()
+        with lock, store.write_transaction(conn):
+            if not checks.signature_ok(nodes, body):
+                alert = checks.bad_signature_alert(nodes, body)
+            else:
+                alert = {"code": body["code"], "detail": body["detail"]}
+            record(body["node_id"], [alert], epoch)
+        return {"status": "alert", "alerts": [alert]}
+
     @app.get("/heartbeats")
     def get_heartbeats(node_id: str, limit: int | None = Query(None, ge=1, le=100000)) -> list[dict[str, Any]]:
         """List the newest stored heartbeats of a node, oldest first."""

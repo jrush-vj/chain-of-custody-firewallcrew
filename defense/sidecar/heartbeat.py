@@ -71,6 +71,26 @@ def send_heartbeat(
     return (False, None)
 
 
+def send_tamper_alert(
+    client: httpx.Client,
+    witness_url: str,
+    node_id: str,
+    private_key: Ed25519PrivateKey,
+    detail: str,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> bool:
+    """Send one signed local spool-integrity alert before the sidecar stops."""
+    payload: dict[str, Any] = {
+        "node_id": node_id,
+        "code": "SPOOL_TAMPER",
+        "detail": detail[:2000],
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    payload["signature"] = sign_payload(private_key, payload)
+    response = client.post(f"{witness_url.rstrip('/')}/tamper-alert", json=payload, timeout=timeout_s)
+    return response.status_code == 200
+
+
 def upload_pending_checkpoints(
     conn: sqlite3.Connection, client: httpx.Client, witness_url: str, timeout_s: float = DEFAULT_TIMEOUT_S
 ) -> int:

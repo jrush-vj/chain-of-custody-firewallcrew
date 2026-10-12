@@ -1,17 +1,20 @@
 """Sidecar runner: spool ingestion plus signed checkpoints according to profile config."""
 import argparse
+import json
 import logging
 import signal
+import sqlite3
 import sys
 import threading
 import tomllib
 from pathlib import Path
 
 from sidecar.checkpoint import make_checkpoint_tick
-from sidecar.heartbeat import start_heartbeat_thread
+import httpx
+from sidecar.heartbeat import send_tamper_alert, start_heartbeat_thread
 from sidecar.ingest import IngestStopError, follow_spool
 from sidecar.keys import load_or_generate_keypair
-from sidecar.store import count_entries, init_db
+from sidecar.store import count_entries, get_entries, init_db
 from tools.validate_spool import load_allowed_types
 
 logging.basicConfig(
@@ -19,6 +22,21 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("sidecar")
+
+
+def _tamper_detail(conn: sqlite3.Connection, spool_path: Path, error: IngestStopError) -> str:
+    """Describe the changed field when both the saved and current event are readable."""
+    try:
+        entries = get_entries(conn, from_seq=max(0, count_entries(conn) - 1), limit=1)
+        current = json.loads(spool_path.read_text(encoding="utf-8").splitlines()[-1])
+        old = entries[0] if entries else {}
+        old_value = old.get("details", {}).get("new", {}).get("amount")
+        new_value = current.get("details", {}).get("new", {}).get("amount")
+        if old_value is not None and new_value is not None and old_value != new_value:
+            return f"log changed: transaction amount {old_value} -> {new_value}; {error}"
+    except (OSError, IndexError, KeyError, TypeError, ValueError):
+        pass
+    return f"local log integrity failure: {error}"
 
 
 def run_sidecar(config_path: Path, witness_url_override: str | None = None) -> int:
@@ -77,7 +95,15 @@ def run_sidecar(config_path: Path, witness_url_override: str | None = None) -> i
     try:
         follow_spool(conn, spool_path, allowed_types=allowed_types, stop_event=stop_event, on_tick=on_tick)
     except IngestStopError as exc:
-        logger.error("STOPPING INGEST: %s", exc)
+        detail = _tamper_detail(conn, spool_path, exc)
+        logger.error("STOPPING INGEST: %s", detail)
+        if hb_thread and witness_url:
+            try:
+                with httpx.Client() as client:
+                    if send_tamper_alert(client, witness_url, config["node"]["node_id"], private_key, detail):
+                        logger.info("Sent SPOOL_TAMPER alert to witness")
+            except Exception:
+                logger.exception("Unable to send SPOOL_TAMPER alert to witness")
         exit_code = 1
     except KeyboardInterrupt:
         logger.info("Interrupted by user, stopping...")
