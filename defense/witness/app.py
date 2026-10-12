@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from witness import checks, store
@@ -22,6 +22,7 @@ logger = logging.getLogger("witness")
 ALERT_THROTTLE_S = 10
 SWEEP_EVERY_S = 5.0
 MAX_BODY_BYTES = 16 * 1024  # real heartbeats and checkpoints are under 1 KiB
+DASHBOARD_PATH = Path(__file__).with_name("dashboard.html")
 
 
 class BodyLimit:
@@ -110,6 +111,15 @@ def create_app(
     app = FastAPI(title="Chain of Custody witness", lifespan=lifespan)
     app.add_middleware(BodyLimit)
     app.state.conn, app.state.sweep_silence = conn, sweep_silence
+
+    @app.get("/", response_class=HTMLResponse)
+    def dashboard() -> HTMLResponse:
+        """Serve the read-only live witness dashboard."""
+        try:
+            return HTMLResponse(DASHBOARD_PATH.read_text(encoding="utf-8"))
+        except OSError:
+            logger.exception("Unable to read witness dashboard")
+            return HTMLResponse("<h1>Witness dashboard unavailable</h1>", status_code=500)
 
     @app.post("/heartbeat")
     def post_heartbeat(body: Any = Body(...)) -> Any:
