@@ -8,12 +8,13 @@ from sqlite3 import Connection
 from typing import Any, BinaryIO
 
 from sidecar.canon import sha256_hex
-from sidecar.store import get_state, insert_entry, set_state, write_transaction
+from sidecar.store import get_state, insert_entry, insert_spool_line, set_state, write_transaction
 from tools.validate_spool import parse_line
 
 logger = logging.getLogger(__name__)
 STATE_OFFSET_KEY = "spool_offset"
 STATE_LAST_LINE_KEY = "spool_last_line"  # "<byte length>:<sha256 hex>" of the last consumed line
+STATE_LINE_NO_KEY = "spool_line_no"
 
 
 class IngestStopError(RuntimeError):
@@ -50,16 +51,20 @@ def _parse_raw(raw: bytes, allowed_types: set[str] | None) -> dict[str, Any] | N
     return event
 
 
-def _commit_line(conn: Connection, event: dict[str, Any] | None, raw: bytes, start: int, end: int) -> None:
+def _commit_line(
+    conn: Connection, event: dict[str, Any] | None, raw: bytes, start: int, end: int, line_no: int
+) -> None:
     """Store the entry (if any) and advance the offset in one transaction, guarded against other writers."""
     with write_transaction(conn):
         if int(get_state(conn, STATE_OFFSET_KEY) or "0") != start:
             raise IngestStopError("Spool offset moved by another writer: is a second sidecar running?")
         if event is not None:
-            insert_entry(conn, event)
+            entry = insert_entry(conn, event)
+            insert_spool_line(conn, int(entry["seq"]), line_no)
         line = raw + b"\n"
         set_state(conn, STATE_OFFSET_KEY, str(end))
         set_state(conn, STATE_LAST_LINE_KEY, f"{len(line)}:{sha256_hex(line)}")
+        set_state(conn, STATE_LINE_NO_KEY, str(line_no))
 
 
 def ingest_batch(
@@ -92,11 +97,16 @@ def ingest_batch(
 
     ingested_count = 0
     current_offset = saved_offset
+    line_no = int(get_state(conn, STATE_LINE_NO_KEY) or "0")
+    if line_no == 0 and saved_offset:
+        with open(spool_path, "rb") as prefix:
+            line_no = prefix.read(saved_offset).count(b"\n")
     for raw in buffer[:last_nl].split(b"\n"):
         start = current_offset
         current_offset += len(raw) + 1
+        line_no += 1
         event = _parse_raw(raw, allowed_types)
-        _commit_line(conn, event, raw, start, current_offset)
+        _commit_line(conn, event, raw, start, current_offset, line_no)
         if event is not None:
             ingested_count += 1
 

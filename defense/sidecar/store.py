@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS checkpoints (
     signature TEXT NOT NULL,
     node_id TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS spool_lines (
+    seq INTEGER PRIMARY KEY,
+    line_no INTEGER NOT NULL UNIQUE
+);
 """
 
 
@@ -172,6 +176,14 @@ def insert_entry(
         "event_type": raw_event["event_type"], "details": details_obj, "prev_hash": prev_hash,
         "hash": entry_hash, "received_at": received_at,
     }
+
+
+def insert_spool_line(conn: sqlite3.Connection, seq: int, line_no: int) -> None:
+    """Record which complete spool line produced a hash-chain entry."""
+    conn.execute(
+        "INSERT INTO spool_lines (seq, line_no) VALUES (?, ?)",
+        (seq, line_no),
+    )
 
 
 def insert_checkpoint(conn: sqlite3.Connection, cp: dict[str, Any]) -> None:
