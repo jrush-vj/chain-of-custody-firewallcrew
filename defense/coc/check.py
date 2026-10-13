@@ -37,3 +37,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=Path("config.toml"))
     args = parser.parse_args()
     return run_check(args.config)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
