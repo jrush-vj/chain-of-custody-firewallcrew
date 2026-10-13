@@ -78,6 +78,15 @@ The witness must not run on the same VPS as the banking system if the demo is
 intended to show detection against a root-level attacker. A root attacker can
 otherwise stop or replace both the logs and the witness.
 
+## Project documentation
+
+- [System architecture](./docs/ARCHITECTURE.md)
+- [Deployment guide](./docs/DEPLOYMENT.md)
+- [Networking and routing](./docs/NETWORKING.md)
+- [Operations and troubleshooting](./docs/OPERATIONS.md)
+- [Tampering demonstration](./docs/TAMPERING_DEMO.md)
+- [Defense implementation and banking integration](./defense/docs/INTEGRATION.md)
+
 ## Validation
 
 Defense tests:
