@@ -18,6 +18,8 @@ export class WitnessStore {
     this.activity = [];
     this.activityCounter = Date.now();
     this.reportedMismatches = new Set();
+    this.restoreRequest = null;        // one pending website restore, picked up by ct105
+    this.lastRestoreRequestAt = 0;     // rate limit: one request per minute
     this.queue = Promise.resolve();
     this.integrityError = null;
     this.lastSuccessfulReconciliationAt = null;

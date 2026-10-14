@@ -80,6 +80,9 @@ button.ap:disabled{opacity:.35;cursor:default}
 .need{margin-top:10px;color:var(--muted);font-size:17px}
 .empty{color:var(--muted);font-style:italic}
 .topr{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.restore{font:700 14px var(--sans);padding:7px 14px;border-radius:8px;border:1px solid var(--amber);background:var(--amber);color:#1a1300;cursor:pointer}
+.restore:disabled{opacity:.5;cursor:default}
+.restore-msg{font:13px var(--mono);color:var(--muted);max-width:460px;text-align:right}
 .feed{list-style:none;padding:0;margin:0;font:16px/1.9 var(--mono)}.feed .m{color:var(--muted)}.okc{color:var(--green);font-weight:700}.badc{color:var(--red);font-weight:700}
 .card .ds{color:var(--muted);font-size:14px}
 .feed.cols{columns:2;column-gap:24px}
@@ -90,7 +93,7 @@ button.ap:disabled{opacity:.35;cursor:default}
 <body>
 <div class="app">
   <div class="top"><h1>Chain of Custody · Witness <span>auditor view</span></h1>
-    <div class="topr"><span class="conn" id="conn">CONNECTING</span></div></div>
+    <div class="topr"><span class="restore-msg" id="restoremsg"></span><button class="restore" id="restore" type="button">Restore to normal</button><span class="conn" id="conn">CONNECTING</span></div></div>
   <section class="panel main" id="main" aria-live="polite"></section>
   <button class="panel card idle" id="c1" data-layer="1"><span class="lbl">Layer 1</span><span class="nm">Custom commands</span><span class="ds">Guarded commands need the team's profile-id</span><span class="when"></span><span class="st">IDLE</span></button>
   <button class="panel card idle" id="c2" data-layer="2"><span class="lbl">Layer 2</span><span class="nm">Heartbeat &amp; checksum</span><span class="ds">Sealed records, random checks, truth check</span><span class="when"></span><span class="st">IDLE</span></button>
@@ -310,7 +313,14 @@ async function poll() {
     const [s, a, ev, mm, act] = await Promise.all([j("/status"), j("/alerts"), j("/timeline"), j("/mismatches"), j("/activity?since_id=" + lastAct)]);
     S = s; alerts = a.alerts; events = ev.events; mism = mm.mismatches;
     offset = s.server_time - Date.now() / 1000;
-    for (const r of act.activity) { acts.push(r); lastAct = Math.max(lastAct, r.id); }
+    for (const r of act.activity) {
+      acts.push(r); lastAct = Math.max(lastAct, r.id);
+      if (r.kind.startsWith("restore_")) lastRestore = r;
+    }
+    if (lastRestore && !restoreRequesting) {
+      const done = lastRestore.kind === "restore_completed";
+      $("restoremsg").textContent = `${done ? "Last restore completed" : lastRestore.kind === "restore_failed" ? "Last restore failed" : "Restore requested"} · ${clock(lastRestore.time)} · ${lastRestore.detail}`;
+    }
     acts = acts.filter((r) => r.time > s.server_time - 200);
     renderAll();
   } catch (e) {
@@ -318,6 +328,21 @@ async function poll() {
   }
 }
 
+
+let lastRestore = null, restoreRequesting = false;
+$("restore").addEventListener("click", async () => {
+  const button = $("restore"), msg = $("restoremsg");
+  button.disabled = true; restoreRequesting = true; msg.textContent = "Asking ct105 to restore…";
+  try {
+    const r = await fetch("/v1/restore-request", { method: "POST" });
+    const body = await r.json().catch(() => ({}));
+    msg.textContent = r.status === 202 ? "Restore requested · ct105 applies it within about 10 seconds"
+      : r.status === 429 ? `Wait ${body.retry_after_s} s before another restore`
+      : r.status === 409 ? "A restore is already waiting for ct105" : "Restore request failed";
+  } catch (e) { msg.textContent = "Restore request failed: witness unreachable"; }
+  restoreRequesting = false;
+  setTimeout(() => { button.disabled = false; }, 60000);
+});
 
 poll(); setInterval(poll, 1000);
 (function loop() { drawMonitor(); requestAnimationFrame(loop); })();

@@ -36,6 +36,7 @@ import hmac
 import json
 import os
 import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -53,6 +54,8 @@ POLL_S = float(os.environ.get("POLL_S", "2"))
 SNAPSHOT_LIMIT = 3000  # keeps one event well under the witness's 16 KB request limit
 SUMMARY_LIMIT = 200
 ARM_CHECK_S = 10
+RESTORE_CHECK_S = 5
+RESTORE_SCRIPT = os.environ.get("RESTORE_SCRIPT", "/opt/chain-of-custody/deploy/ct105/restore-normal.sh")
 WRAPPED_COMMANDS = ["nano", "vi", "vim", "sed", "rm", "mv", "cp", "truncate", "shred", "tee"]
 
 
@@ -242,35 +245,73 @@ def status_event(armed, count):
 
 # ---------- witness transport ----------
 
-def post_event(event):
-    """Send one signed event. Returns True when the witness accepted it."""
-    url = os.environ["WITNESS_URL"].rstrip("/") + "/v1/layer-events"
-    body = json.dumps(event).encode("utf-8")
+def signed_request(method, path, body=b""):
+    """A witness request signed with the shared HMAC secret. The signature covers method, path, time, body."""
+    url = os.environ["WITNESS_URL"].rstrip("/") + path
     timestamp = str(int(time.time() * 1000))
     signature = hmac.new(
         os.environ["WITNESS_HMAC_SECRET"].encode("utf-8"),
-        f"POST\n/v1/layer-events\n{timestamp}\n{body.decode('utf-8')}".encode("utf-8"),
+        f"{method}\n{path}\n{timestamp}\n{body.decode('utf-8')}".encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
-    request = urllib.request.Request(
-        url,
-        data=body,
-        method="POST",
-        headers={
-            "content-type": "application/json",
-            # Python's default agent string is blocked by the Cloudflare bot rules in front of the witness.
-            "user-agent": "coc-layer1-monitor/1.0",
-            "x-witness-node": os.environ["WITNESS_NODE_ID"],
-            "x-witness-timestamp": timestamp,
-            "x-witness-signature": signature,
-        },
-    )
+    headers = {
+        # Python's default agent string is blocked by the Cloudflare bot rules in front of the witness.
+        "user-agent": "coc-layer1-monitor/1.0",
+        "x-witness-node": os.environ["WITNESS_NODE_ID"],
+        "x-witness-timestamp": timestamp,
+        "x-witness-signature": signature,
+    }
+    if body:
+        headers["content-type"] = "application/json"
+    return urllib.request.Request(url, data=body or None, method=method, headers=headers)
+
+
+def post_event(event):
+    """Send one signed event. Returns True when the witness accepted it."""
+    request = signed_request("POST", "/v1/layer-events", json.dumps(event).encode("utf-8"))
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status == 200
     except (urllib.error.URLError, OSError) as error:
         log(f"witness unreachable, will retry: {error}")
         return False
+
+
+# ---------- website restore ----------
+
+def check_restore_request():
+    """If the website has queued a restore, run restore-normal.sh and report the result back.
+
+    The witness only ever queues a fixed action with no parameters. This side pulls it with a
+    signed request, so no port on ct105 is opened.
+    """
+    try:
+        with urllib.request.urlopen(signed_request("GET", "/v1/restore-pending"), timeout=10) as response:
+            pending = json.loads(response.read().decode("utf-8")).get("pending")
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        log(f"restore check unavailable: {error}")
+        return
+    if not pending:
+        return
+    log(f"restore requested at {pending.get('requested_at')}; running restore-normal")
+    try:
+        result = subprocess.run(["bash", RESTORE_SCRIPT], capture_output=True, text=True, timeout=600)
+        ok = result.returncode == 0
+        output = result.stdout.splitlines()
+        layer1 = sum(1 for line in output if line.startswith("restored ") and "approved copy" in line)
+        layer2 = sum(1 for line in output if line.startswith("restored transaction #"))
+        summary = f"Layer 1: {layer1} file(s) restored; Layer 2: {layer2} row(s) restored"
+        if not ok:
+            summary = f"restore script exited {result.returncode}: " + (result.stderr.strip() or "see ct105 logs")
+    except (OSError, subprocess.SubprocessError) as error:
+        ok, summary = False, f"restore could not run: {error}"
+    body = json.dumps({"id": pending["id"], "ok": ok, "summary": summary[:300]}).encode("utf-8")
+    try:
+        with urllib.request.urlopen(signed_request("POST", "/v1/restore-ack", body), timeout=10):
+            pass
+        log(f"restore {'completed' if ok else 'failed'}: {summary}")
+    except (urllib.error.URLError, OSError) as error:
+        log(f"restore acknowledgement not delivered, will retry: {error}")
 
 
 # ---------- main loop ----------
@@ -290,6 +331,7 @@ def run():
     armed, count = tripwire_status()
     pending = [status_event(armed, count)]
     last_armed, next_status_check = armed, time.time() + ARM_CHECK_S
+    next_restore_check = time.time() + RESTORE_CHECK_S
     log(f"watching {WATCH_DIR} and spool {COMMANDS_SPOOL}; armed={armed} wrappers={count}")
 
     while True:
@@ -307,6 +349,9 @@ def run():
                 pending.append(status_event(armed, count))
                 last_armed = armed
             next_status_check = time.time() + ARM_CHECK_S
+        if time.time() >= next_restore_check:
+            check_restore_request()
+            next_restore_check = time.time() + RESTORE_CHECK_S
 
         still_pending = []
         for event in pending:

@@ -376,3 +376,56 @@ test('records heartbeats and challenge entries from bank reconciliation', async 
   assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_ok'));
   assert.equal(store.reportedMismatches.size, 0);
 });
+
+test('queues a website restore request, rate-limits it, and records the ct105 acknowledgement', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-restore-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const signed = (method, pathname, body = '') => {
+    const timestamp = String(Date.now());
+    return {
+      'x-witness-node': process.env.WITNESS_NODE_ID,
+      'x-witness-timestamp': timestamp,
+      'x-witness-signature': createHmac('sha256', process.env.WITNESS_HMAC_SECRET)
+        .update(`${method}\n${pathname}\n${timestamp}\n${body}`)
+        .digest('hex')
+    };
+  };
+
+  try {
+    const first = await fetch(`${baseUrl}/v1/restore-request`, { method: 'POST' });
+    assert.equal(first.status, 202);
+    const id = (await first.json()).id;
+    assert.equal((await fetch(`${baseUrl}/v1/restore-request`, { method: 'POST' })).status, 409);
+    assert.equal((await fetch(`${baseUrl}/v1/restore-pending`)).status, 401);
+    const pending = await fetch(`${baseUrl}/v1/restore-pending`, { headers: signed('GET', '/v1/restore-pending') });
+    assert.equal((await pending.json()).pending.id, id);
+
+    const wrongBody = JSON.stringify({ id: 'not-the-id', ok: true, summary: 'x' });
+    const wrong = await fetch(`${baseUrl}/v1/restore-ack`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...signed('POST', '/v1/restore-ack', wrongBody) },
+      body: wrongBody
+    });
+    assert.equal(wrong.status, 404);
+
+    const okBody = JSON.stringify({ id, ok: true, summary: 'Layer 1: 1 file restored; Layer 2: 2 rows restored' });
+    const ack = await fetch(`${baseUrl}/v1/restore-ack`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...signed('POST', '/v1/restore-ack', okBody) },
+      body: okBody
+    });
+    assert.equal(ack.status, 200);
+    const kinds = store.recentActivity().map((item) => item.kind);
+    assert.ok(kinds.includes('restore_requested'));
+    assert.ok(kinds.includes('restore_completed'));
+    assert.equal((await fetch(`${baseUrl}/v1/restore-request`, { method: 'POST' })).status, 429);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

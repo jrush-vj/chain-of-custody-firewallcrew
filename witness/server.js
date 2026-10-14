@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -339,6 +339,45 @@ export const createWitnessServer = (store) =>
         return sendJson(response, 200, {
           activity: store.recentActivity(Number(rawSinceId), 200)
         });
+      }
+      // Website "Restore to normal" button. It queues one fixed action for ct105 to pick up; it takes
+      // no parameters, and ct105 polls for it with a signed request, so nothing on ct105 is exposed.
+      if (request.method === 'POST' && pathname === '/v1/restore-request') {
+        await readBody(request);
+        const now = Date.now();
+        if (store.restoreRequest) {
+          return sendJson(response, 409, { status: 'already_requested', id: store.restoreRequest.id });
+        }
+        if (now - store.lastRestoreRequestAt < 60_000) {
+          const retry = Math.ceil((60_000 - (now - store.lastRestoreRequestAt)) / 1000);
+          return sendJson(response, 429, { status: 'rate_limited', retry_after_s: retry });
+        }
+        store.lastRestoreRequestAt = now;
+        store.restoreRequest = { id: randomUUID(), requested_at: new Date(now).toISOString() };
+        store.recordActivity('restore_requested', 'restore to normal requested from the website; waiting for ct105');
+        return sendJson(response, 202, { status: 'requested', id: store.restoreRequest.id });
+      }
+      if (request.method === 'GET' && pathname === '/v1/restore-pending') {
+        authorize(request, pathname, '');
+        return sendJson(response, 200, { pending: store.restoreRequest });
+      }
+      if (request.method === 'POST' && pathname === '/v1/restore-ack') {
+        const body = await readBody(request);
+        authorize(request, pathname, body);
+        let payload;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          return sendJson(response, 400, { error: 'Invalid JSON body' });
+        }
+        if (!store.restoreRequest || payload.id !== store.restoreRequest.id) {
+          return sendJson(response, 404, { error: 'No such restore request' });
+        }
+        const ok = payload.ok === true;
+        const summary = String(payload.summary || (ok ? 'restore finished' : 'restore failed')).slice(0, 300);
+        store.restoreRequest = null;
+        store.recordActivity(ok ? 'restore_completed' : 'restore_failed', summary);
+        return sendJson(response, 200, { status: 'acknowledged' });
       }
       if (request.method === 'POST' && pathname === '/quarantine/approve') {
         await readBody(request);
