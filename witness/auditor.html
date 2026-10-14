@@ -80,11 +80,6 @@ button.ap:disabled{opacity:.35;cursor:default}
 .need{margin-top:10px;color:var(--muted);font-size:17px}
 .empty{color:var(--muted);font-style:italic}
 .topr{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
-.pv{display:flex;gap:4px;align-items:center;font:600 12px var(--mono);color:var(--muted)}
-.pv span{margin-right:4px;letter-spacing:.1em;text-transform:uppercase}
-.pv button{font:600 13px var(--sans);padding:5px 11px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer}
-.pv button[aria-pressed="true"]{background:var(--amber);border-color:var(--amber);color:#1a1300}
-.pvnote{position:fixed;left:50%;transform:translateX(-50%);bottom:8px;font:600 12px var(--mono);color:var(--amber);background:var(--panel2);border:1px dashed var(--amber);padding:3px 10px;border-radius:6px;z-index:5}
 .feed{list-style:none;padding:0;margin:0;font:16px/1.9 var(--mono)}.feed .m{color:var(--muted)}.okc{color:var(--green);font-weight:700}.badc{color:var(--red);font-weight:700}
 .card .ds{color:var(--muted);font-size:14px}
 .feed.cols{columns:2;column-gap:24px}
@@ -95,12 +90,11 @@ button.ap:disabled{opacity:.35;cursor:default}
 <body>
 <div class="app">
   <div class="top"><h1>Chain of Custody · Witness <span>auditor view</span></h1>
-    <div class="topr"><div class="pv" id="pv" role="group" aria-label="Preview"><span>Preview</span><button data-pv="live" aria-pressed="true">Live</button><button data-pv="l1">Layer 1</button><button data-pv="l2">Layer 2</button><button data-pv="l3">Layer 3</button></div><span class="conn" id="conn">CONNECTING</span></div></div>
+    <div class="topr"><span class="conn" id="conn">CONNECTING</span></div></div>
   <section class="panel main" id="main" aria-live="polite"></section>
   <button class="panel card idle" id="c1" data-layer="1"><span class="lbl">Layer 1</span><span class="nm">Custom commands</span><span class="ds">Guarded commands need the team's profile-id</span><span class="when"></span><span class="st">IDLE</span></button>
   <button class="panel card idle" id="c2" data-layer="2"><span class="lbl">Layer 2</span><span class="nm">Heartbeat &amp; checksum</span><span class="ds">Sealed records, random checks, truth check</span><span class="when"></span><span class="st">IDLE</span></button>
   <button class="panel card idle" id="c3" data-layer="3"><span class="lbl">Layer 3</span><span class="nm">Quarantine</span><span class="ds">Network cut → server locks itself down</span><span class="when"></span><span class="st">IDLE</span></button>
-  <div class="pvnote" id="pvnote" hidden>PREVIEW · sample data, not live</div>
   <section class="panel mon"><div class="hd"><span>Live heartbeat monitor</span>
     <span class="legend"><b style="color:var(--blue)">▲</b> witness asks · <b style="color:var(--green)">▼</b> matches · <b style="color:var(--red)">▼</b> tampered · <b style="color:var(--amber)">?</b> no answer · <b style="color:var(--muted)">•</b> heartbeat</span></div>
     <canvas id="mon" aria-label="Heartbeat and random check monitor"></canvas></section>
@@ -236,7 +230,6 @@ $("main").addEventListener("click", async (e) => {
   const b = e.target.closest("button.ap");
   if (!b) return;
   b.disabled = true;
-  if (mode !== "live") { approvals.add(Number(b.dataset.holder)); buildPreview(mode); renderAll(); return; }
   try { await fetch("/quarantine/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ holder: Number(b.dataset.holder) }) }); } catch (err) { b.disabled = false; }
 });
 for (const n of [1, 2, 3]) $("c" + n).addEventListener("click", () => { view = view === n ? 0 : n; pinned = view !== 0; renderAll(); });
@@ -313,7 +306,6 @@ function renderAll() {
 }
 
 async function poll() {
-  if (mode !== "live") return;
   try {
     const [s, a, ev, mm, act] = await Promise.all([j("/status"), j("/alerts"), j("/timeline"), j("/mismatches"), j("/activity?since_id=" + lastAct)]);
     S = s; alerts = a.alerts; events = ev.events; mism = mm.mismatches;
@@ -326,80 +318,8 @@ async function poll() {
   }
 }
 
-// ---------- Preview: sample data so every screen can be shown without a running server ----------
-let mode = "live", approvals = new Set();
-const iso = (t) => new Date(t * 1000).toISOString();
-function sampleActs(now, scenario) {
-  const out = []; let id = 1;
-  const quiet = scenario === "l3" ? now - 52 : now;  // network cut 52 s ago in the Layer 3 preview
-  for (let t = now - 70; t < quiet; t += 5) out.push({ id: id++, time: t, kind: "heartbeat", detail: "log-server-1" });
-  const seqs = [37, 12, 88, 64, 101, 23, 119, 45, 76, 9, 112, 58, 30, 95];
-  let k = 0;
-  for (let t = now - 68; t < quiet - 1; t += 4.3, k++) {
-    const c = "c-" + (1000 + k), n = seqs[k % seqs.length];
-    const what = k % 5 === 4 ? `sweep #1-#${120 + k}` : k % 5 === 2 ? "state acc-2" : `record #${n}`;
-    out.push({ id: id++, time: t, kind: "challenge_issued", detail: `${c} ${what}` });
-    const bad = scenario === "l2" && k % 5 === 4 && t > now - 25;
-    out.push({ id: id++, time: t + 0.6, kind: bad ? "challenge_failed" : "challenge_ok",
-      detail: bad ? `${c} ${what}: tampered #42, #57` : `${c} ${what} matches` });
-  }
-  return out.sort((a, b) => a.time - b.time);
-}
-function buildPreview(scenario) {
-  const now = Date.now() / 1000;
-  S = { platform_id: "log-server-1", connection: "connected", heartbeat_age: now % 5, server_time: now,
-        records_verified: 128, last_verified: { seq: 128, time: iso(now - 1) }, last_sweep: now - 6,
-        layers: { 1: "on", 2: "on", 3: "on" }, checks: { A: "green", B: "green", C: "green" }, state: "normal", quarantine: null };
-  alerts = []; events = []; mism = []; acts = sampleActs(now, scenario); offset = 0;
-  const who = { user: "admin", uid: 1000, src_ip: "10.0.4.17" }, eve = { user: "ops-backup", uid: 1003, src_ip: "185.220.101.4" };
-  if (scenario === "l1" || scenario === "l2") {
-    events = [
-      { layer: 1, trigger: "authorized:nano", state: "normal", time: iso(now - 300), who, detail: { cmd: "nano /var/log/bank/app.log", result: "allowed (profile demo-bank)" } },
-      { layer: 1, trigger: "wrapper:vim", state: "alert", time: iso(now - 40), who: eve, detail: { cmd: "vim /var/log/bank/app.log", result: "deceived (decoy)", rule: "Editor 'vim' used without a profile-id" } },
-      { layer: 1, trigger: "deception:vim", state: "alert", time: iso(now - 31), who: eve, detail: { cmd: "vim /var/log/bank/app.log", result: "edit captured, real file untouched",
-        diff: "--- /var/log/bank/app.log\n+++ /var/log/bank/app.log (attempted)\n@@ -42 +42 @@\n-txn-00042 ACC-1031 -> ACC-2210 5000.00\n+txn-00042 ACC-1031 -> ACC-2210 50.00\n" } },
-      { layer: 1, trigger: "wrapper:rm", state: "alert", time: iso(now - 22), who: eve, detail: { cmd: "rm /var/log/bank/audit.log", result: "deceived (decoy)", rule: "Write to protected path /var/log/bank/audit.log without a profile-id" } },
-    ];
-    alerts = events.filter((e) => e.state === "alert").map((e, i) => ({ kind: "layer1_tripwire", ref: "ev-" + i, tamper_type: null, detail: e.detail.cmd, time: Date.parse(e.time) / 1000, resolved: 0 }));
-    S.layers[1] = "tripped"; S.state = "alert";
-  }
-  if (scenario === "l2") {
-    const rec = (seq, amt, from, to) => ({ txn_id: `txn-000${seq}`, timestamp: iso(now - 3600 + seq * 20), from_account: from, to_account: to,
-      amount_paise: amt, from_balance_paise: 18250000, to_balance_paise: 9120000 });
-    mism = [
-      { seq: 42, caught_time: now - 12, caught_by: "sweep #1-#124", fields: ["amount_paise"], witness_copy: rec(42, 500000, "ACC-1031", "ACC-2210"),
-        server_copy: rec(42, 5000, "ACC-1031", "ACC-2210"), witness_hash: "3fa9c1d07be21e8a", server_hash: "91cc4ab2e5f0707b" },
-      { seq: 57, caught_time: now - 11, caught_by: "full sweep #1-#128", fields: ["to_account"], witness_copy: rec(57, 120000, "ACC-1031", "ACC-2210"),
-        server_copy: rec(57, 120000, "ACC-1031", "ACC-9999"), witness_hash: "a17e00c3", server_hash: "5be2d9f1" },
-    ];
-    alerts = alerts.concat(mism.map((m) => ({ kind: "record_mismatch", ref: String(m.seq), tamper_type: "entry_edited", detail: "", time: m.caught_time, resolved: 0 })),
-      [{ kind: "db_edited_without_log", ref: "acc-2", tamper_type: "db_edited_without_log", detail: "ACC-2210 bank balance 101200.00, witness replay 91200.00", time: now - 8, resolved: 0 }]);
-    S.checks = { A: "red", B: "green", C: "red" };
-  }
-  if (scenario === "l3") {
-    const holders = ["SOC lead", "Auditor", "Compliance officer"].map((name, i) => ({ name, approved: approvals.has(i) }));
-    if (approvals.size >= 2) { approvals.clear(); setTimeout(() => setMode("live"), 1500); }
-    S.connection = "lost"; S.heartbeat_age = 52; S.state = "quarantined"; S.layers[3] = "quarantined";
-    S.checks.B = "red"; S.last_verified = { seq: 128, time: iso(now - 52) };
-    S.quarantine = { active: true, since: now - 52, confirmed: false, id: null, unverified: null, after: 45, needed: 2, holders, unlock_issued: false };
-    alerts = [{ kind: "silence", ref: "x", tamper_type: "agent_silenced", detail: "no valid heartbeat for over 15 s", time: now - 37, resolved: 0 }];
-    events = [{ layer: 3, trigger: "quarantine:locked", state: "alert", time: iso(now - 7), detail: { quarantine_id: null, dry_run: false,
-      site_down: [{ cmd: "docker compose stop frontend" }], lockout: [{ cmd: "touch /etc/nologin" }, { cmd: "passwd -l root" }, { cmd: "passwd -l admin" },
-      { cmd: "loginctl terminate-user root" }, { cmd: "loginctl terminate-user admin" }] } }];
-  }
-}
-function setMode(m) {
-  mode = m; approvals.clear();
-  document.querySelectorAll("#pv button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.pv === m)));
-  $("pvnote").hidden = m === "live";
-  view = { normal: 0, l1: 1, l2: 2, l3: 3 }[m] ?? 0; pinned = m !== "live";
-  prevCaught = { 1: 0, 2: 0, 3: 0 }; $("main").dataset.html = "";
-  if (m === "live") { acts = []; lastAct = 0; poll(); } else { buildPreview(m); renderAll(); }
-}
-$("pv").addEventListener("click", (e) => { const b = e.target.closest("button[data-pv]"); if (b) setMode(b.dataset.pv); });
 
-if (["#l1", "#l2", "#l3"].includes(location.hash)) setMode(location.hash.slice(1));
-poll(); setInterval(() => (mode === "live" ? poll() : (buildPreview(mode), renderAll())), 1000);
+poll(); setInterval(poll, 1000);
 (function loop() { drawMonitor(); requestAnimationFrame(loop); })();
 </script>
 </body>

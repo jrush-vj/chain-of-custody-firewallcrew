@@ -29,7 +29,7 @@ test('serves the cybersec auditor dashboard on the banking witness API', async (
     assert.match(html, /class="nm">Custom commands</);
     assert.match(html, /class="nm">Heartbeat &amp; checksum</);
     assert.match(html, /class="nm">Quarantine</);
-    assert.match(html, /PREVIEW · sample data, not live/);
+    assert.doesNotMatch(html, /sample data|data-pv|Preview/);
     assert.match(html, /j\("\/status"\)/);
     assert.match(html, /j\("\/alerts"\)/);
     assert.match(html, /j\("\/timeline"\)/);

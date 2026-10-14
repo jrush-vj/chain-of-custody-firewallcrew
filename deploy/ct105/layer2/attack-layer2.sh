@@ -3,10 +3,12 @@
 # The witness reconciles its sealed copy against the bank every 10 seconds and must catch each one.
 #
 #   1. amount: one committed transaction's amount changes by 1.00
-#   2. type:   another deposit or withdrawal has its type flipped
+#   2. type:   a deposit or withdrawal has its type flipped (the same row is reused if it is the
+#              only witnessed one)
 #
-# Each change is undone by a trap, verified, and the witness must report the row clear again.
-# Only transactions.amount and transactions.type on demo rows change. Account balances are never touched.
+# Each change is written to the journal first, then undone by a trap, verified, and the witness must
+# report the row clear again. Only transactions.amount and transactions.type on demo rows change.
+# Account balances are never touched.
 #
 # Run on ct105 as root:
 #   bash /opt/chain-of-custody/deploy/ct105/layer2/attack-layer2.sh
@@ -18,12 +20,14 @@ fi
 
 app_dir="${APP_DIR:-/opt/chain-of-custody/banking-system}"
 witness_url="${WITNESS_STATUS_URL:-https://witness.jrushvj.dev/v1/status}"
+journal="${COC_LAYER2_JOURNAL:-/var/lib/coc-demo/layer2-changes.tsv}"
 poll_limit="${POLL_LIMIT_S:-240}"
 pause_s="${PAUSE_S:-15}"   # time for the dashboard to show each alert before the restore
 
 cd "$app_dir" || { echo "missing $app_dir"; exit 1; }
 set -a; . ./.env; set +a          # loads DB_USER/DB_NAME; values are never printed
 db="${DB_NAME:-bankingsystem}"
+mkdir -p "$(dirname "$journal")"
 
 psql_q() { docker compose exec -T postgres psql -U "$DB_USER" -d "$db" -tA -F'|' -c "$1"; }
 
@@ -53,8 +57,8 @@ wait_for() {
   return 1
 }
 
-# Prints "id|amount|type" for the newest confirmed deposit/withdrawal the witness is not flagging
-# and that is not in the excluded list (a comma-separated id list, may be empty).
+# Prints "id|amount|type" for the newest confirmed deposit/withdrawal that the witness is not flagging
+# and that is not in the excluded list (comma-separated ids, may be empty).
 pick_row() {
   local excluded="$1" before="$2" candidate cid
   while IFS= read -r candidate; do
@@ -74,14 +78,15 @@ restore_now() {
   if [ -n "$back" ]; then
     echo "$(date +%H:%M:%S) restored transaction #$RESTORE_ID"
   else
-    echo "RESTORE FAILED for #$RESTORE_ID; run this by hand: $RESTORE_SQL"
+    echo "RESTORE FAILED for #$RESTORE_ID; run scripts/restore-layer2.sh or this by hand: $RESTORE_SQL"
   fi
 }
 
-# run_case <label> <id> <apply SQL> <restore SQL>
+# run_case <label> <id> <field> <old> <new> <apply SQL> <restore SQL>
 run_case() {
-  local label="$1" id="$2" apply_sql="$3" restore_sql="$4" applied
+  local label="$1" id="$2" field="$3" old="$4" new="$5" apply_sql="$6" restore_sql="$7" applied
   echo; echo "$(date +%H:%M:%S) ATTACK: $label on transaction #$id"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$id" "$field" "$old" "$new" >> "$journal"
   applied="$(psql_q "$apply_sql")"
   if [ -z "$applied" ]; then
     echo "guard failed for #$id: the row changed under us; nothing was changed"; return 1
@@ -111,16 +116,21 @@ failures=0
 row1="$(pick_row "" "$before")" || { echo "no clean witnessed transaction found"; exit 1; }
 IFS='|' read -r id1 old1 type1 <<< "$row1"
 new1="$(python3 -c "from decimal import Decimal; print(Decimal('$old1') + Decimal('1.00'))")"
-run_case "amount $old1 -> $new1" "$id1" \
+run_case "amount $old1 -> $new1" "$id1" amount "$old1" "$new1" \
   "UPDATE transactions SET amount = $new1 WHERE id = $id1 AND amount = $old1 AND type = '$type1' RETURNING id;" \
   "UPDATE transactions SET amount = $old1 WHERE id = $id1 AND amount = $new1 RETURNING id;" \
   || failures=$((failures + 1))
 
-# Case 2: type flip, on a different row.
-row2="$(pick_row "$id1" "$before")" || { echo "no second clean transaction found"; exit 1; }
-IFS='|' read -r id2 old2 type2 <<< "$row2"
+# Case 2: type flip. Another clean row if one exists, otherwise the same row (restored by case 1).
+if row2="$(pick_row "$id1" "$before")"; then
+  IFS='|' read -r id2 old2 type2 <<< "$row2"
+else
+  row2="$(psql_q "SELECT id, amount, type FROM transactions WHERE id = $id1;")"
+  IFS='|' read -r id2 old2 type2 <<< "$row2"
+  echo "only one witnessed row exists; reusing #$id2 for the type change"
+fi
 if [ "$type2" = withdrawal ]; then new_type=deposit; else new_type=withdrawal; fi
-run_case "type $type2 -> $new_type" "$id2" \
+run_case "type $type2 -> $new_type" "$id2" type "$type2" "$new_type" \
   "UPDATE transactions SET type = '$new_type' WHERE id = $id2 AND amount = $old2 AND type = '$type2' RETURNING id;" \
   "UPDATE transactions SET type = '$type2' WHERE id = $id2 AND type = '$new_type' RETURNING id;" \
   || failures=$((failures + 1))
