@@ -145,6 +145,7 @@ const auditorLayerEvents = (store) => store.recentLayerEvents().map((record) => 
   state: record.state,
   time: toEpochSeconds(record.recorded_at),
   who: record.who || {},
+  resolved: Boolean(record.resolved),
   detail: { ...record.detail, summary: record.summary }
 }));
 

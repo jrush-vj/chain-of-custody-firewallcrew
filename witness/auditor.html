@@ -162,12 +162,12 @@ function screen0() {
 function screen1() {
   const rows = events.filter((e) => e.layer === 1);
   if (!rows.length) return `<h2>Layer 1 · Custom commands</h2><p class="sub">No commands seen yet. The team uses <code>&lt;cmd&gt; --&lt;profile-id&gt;</code>; anything else trips.</p>`;
-  const last = [...rows].reverse().find((e) => e.state === "alert");
+  const last = [...rows].reverse().find((e) => e.state === "alert" && !e.resolved);
   const diffEv = [...rows].reverse().find((e) => e.detail && e.detail.diff);
   const snapEv = [...rows].reverse().find((e) => e.detail && e.detail.approved_content !== undefined);
   const body = rows.slice(-14).reverse().map((e) => {
     const d = e.detail || {}, w = e.who || {};
-    return `<tr class="${e.state === "alert" ? "hit" : ""}"><td class="m">${isoClock(e.time)}</td><td>${esc(w.user || (w.uid ?? "—"))}</td><td class="m">${esc(w.src_ip || "local")}</td><td class="m">${esc(d.cmd || e.trigger)}</td><td>${esc(d.result || (e.state === "alert" ? "caught" : "logged"))}</td></tr>`;
+    return `<tr class="${e.state === "alert" && !e.resolved ? "hit" : ""}"><td class="m">${isoClock(e.time)}</td><td>${esc(w.user || (w.uid ?? "—"))}</td><td class="m">${esc(w.src_ip || "local")}</td><td class="m">${esc(d.cmd || e.trigger)}</td><td>${esc(e.resolved ? "restored" : d.result || (e.state === "alert" ? "caught" : "logged"))}</td></tr>`;
   }).join("");
   const diff = diffEv ? `<pre class="diff">${esc(diffEv.detail.diff).split("\n").map((l) => l.startsWith("+") && !l.startsWith("+++") ? `<span class="add">${l}</span>` : l.startsWith("-") && !l.startsWith("---") ? `<span class="del">${l}</span>` : l).join("\n")}</pre>` : "";
   return `<h2>Layer 1 · Custom commands</h2><p class="sub">Command log from the server</p>
