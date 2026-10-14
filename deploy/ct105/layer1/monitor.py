@@ -258,6 +258,8 @@ def post_event(event):
         method="POST",
         headers={
             "content-type": "application/json",
+            # Python's default agent string is blocked by the Cloudflare bot rules in front of the witness.
+            "user-agent": "coc-layer1-monitor/1.0",
             "x-witness-node": os.environ["WITNESS_NODE_ID"],
             "x-witness-timestamp": timestamp,
             "x-witness-signature": signature,
