@@ -26,9 +26,11 @@ if [ "$branch" != main ]; then
   echo "refusing: checkout is on '$branch', not main" >&2
   exit 1
 fi
-if [ -n "$(git_in status --porcelain)" ]; then
-  echo "refusing: local changes present (review, do not force):" >&2
-  git_in status --short >&2
+# Untracked files are ignored here on purpose: a fast-forward pull refuses to overwrite them,
+# and host-only config such as ct105 defense/config.toml must stay untracked.
+if [ -n "$(git_in status --porcelain --untracked-files=no)" ]; then
+  echo "refusing: tracked files have local changes (review, do not force):" >&2
+  git_in status --short --untracked-files=no >&2
   exit 1
 fi
 
