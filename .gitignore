@@ -25,13 +25,6 @@ banking-system/**/logs/
 banking-system/**/spool/
 banking-system/**/ssl/*.pem
 
-# Defense runtime data
-defense/config.toml
-defense/data/
-defense/spool/*.jsonl
-defense/spool/.*-offset
-defense/*.db
-
 # Build output
 banking-system/frontend/build/
 banking-system/frontend/coverage/

@@ -47,8 +47,8 @@ A complete banking system with REST API backend and modern React frontend, built
 
 1. Clone the repository:
 ```bash
-git clone <THIS_REPOSITORY_URL>
-cd banking-security-demo/banking-system
+git clone https://github.com/swissmarley/banking-system.git
+cd banking-system
 ```
 
 2. Install backend dependencies:
@@ -287,4 +287,3 @@ npm run dev
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-

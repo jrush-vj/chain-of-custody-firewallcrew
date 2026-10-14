@@ -5,8 +5,7 @@
   "description": "Banking system backend API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "coc:spool": "node tools/coc-audit-spooler.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
@@ -28,4 +27,3 @@
     "validator": "^13.11.0"
   }
 }
-

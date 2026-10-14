@@ -155,53 +155,6 @@ export const createTables = async () => {
         ADD COLUMN IF NOT EXISTS reference TEXT
     `);
 
-    // Append-only evidence for the Chain of Custody adapter. The adapter reads
-    // this table with a separate read-only database user.
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS coc_audit (
-        id BIGSERIAL PRIMARY KEY,
-        ts TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        actor TEXT NOT NULL DEFAULT 'unknown',
-        event_type TEXT NOT NULL,
-        table_name TEXT NOT NULL,
-        row_id TEXT,
-        old_row JSONB,
-        new_row JSONB
-      )
-    `);
-    await pool.query(`
-      CREATE INDEX IF NOT EXISTS IX_coc_audit_id ON coc_audit (id)
-    `);
-    await pool.query(`
-      CREATE OR REPLACE FUNCTION coc_audit_row() RETURNS trigger AS $$
-      DECLARE
-        old_json JSONB := CASE WHEN TG_OP <> 'INSERT' THEN to_jsonb(OLD) END;
-        new_json JSONB := CASE WHEN TG_OP <> 'DELETE' THEN to_jsonb(NEW) END;
-      BEGIN
-        INSERT INTO coc_audit (actor, event_type, table_name, row_id, old_row, new_row)
-        VALUES (
-          COALESCE(NULLIF(current_setting('app.user', true), ''), 'unknown'),
-          TG_ARGV[0] || CASE TG_OP
-            WHEN 'INSERT' THEN '_created'
-            WHEN 'UPDATE' THEN '_updated'
-            ELSE '_deleted'
-          END,
-          TG_TABLE_NAME,
-          COALESCE(new_json ->> 'id', old_json ->> 'id'),
-          old_json,
-          new_json
-        );
-        RETURN NULL;
-      END;
-      $$ LANGUAGE plpgsql
-    `);
-    await pool.query(`
-      DROP TRIGGER IF EXISTS coc_audit_transactions ON transactions;
-      CREATE TRIGGER coc_audit_transactions
-        AFTER INSERT OR UPDATE OR DELETE ON transactions
-        FOR EACH ROW EXECUTE FUNCTION coc_audit_row('transaction')
-    `);
-
     // Scheduled payments for recurring bills/orders
     await pool.query(`
       CREATE TABLE IF NOT EXISTS scheduled_payments (

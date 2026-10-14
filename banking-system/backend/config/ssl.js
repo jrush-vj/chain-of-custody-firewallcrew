@@ -12,14 +12,14 @@ export const createHTTPServer = (app, port = 5000) => {
   if (process.env.USE_SSL === 'true') {
     const certPath = process.env.SSL_CERT || path.join(__dirname, '../../ssl/cert.pem');
     const keyPath = process.env.SSL_KEY || path.join(__dirname, '../../ssl/key.pem');
-    
+
     try {
       if (fs.existsSync(certPath) && fs.existsSync(keyPath)) {
         const options = {
           key: fs.readFileSync(keyPath),
           cert: fs.readFileSync(certPath)
         };
-        
+
         return https.createServer(options, app).listen(port, () => {
           console.log(`HTTPS server running on port ${port}`);
         });
@@ -34,7 +34,6 @@ export const createHTTPServer = (app, port = 5000) => {
       return null;
     }
   }
-  
+
   return null;
 };
-

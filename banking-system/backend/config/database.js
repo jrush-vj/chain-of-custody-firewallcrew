@@ -31,12 +31,12 @@ export const connectDB = async () => {
       return pool;
     }
     pool = new Pool(config);
-    
+
     // Test the connection
     const client = await pool.connect();
     console.log(`Connected to PostgreSQL: ${config.host}:${config.port}/${config.database}`);
     client.release();
-    
+
     return pool;
   } catch (error) {
     console.error('Database connection error:', error.message);
