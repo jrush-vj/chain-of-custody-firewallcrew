@@ -35,6 +35,14 @@ body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 var(--sans);
 .card.passed{border-color:#1d5a42}.card.passed .st{color:var(--green)}
 .card.caught{border-color:var(--red);background:linear-gradient(180deg,var(--red-bg),var(--panel) 70%)}.card.caught .st{color:var(--red)}
 .card.active{box-shadow:inset 0 0 0 1px var(--text)}
+/* Layer 3 going active: a brief "disconnecting" sweep before it settles on QUARANTINED. */
+.card.disconnecting{position:relative;overflow:hidden;animation:l3flash 2s ease-in-out}
+.card.disconnecting .st{animation:l3blink .5s steps(1) infinite}
+.card.disconnecting::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 40%,rgba(255,92,92,.4) 50%,transparent 60%);animation:l3sweep 1.3s ease-out 2;pointer-events:none}
+@keyframes l3flash{0%,100%{box-shadow:0 0 0 0 rgba(255,92,92,0)}20%,60%{box-shadow:0 0 0 6px rgba(255,92,92,.3)}}
+@keyframes l3blink{50%{opacity:.2}}
+@keyframes l3sweep{from{transform:translateX(-120%)}to{transform:translateX(120%)}}
+@media (prefers-reduced-motion:reduce){.card.disconnecting,.card.disconnecting .st,.card.disconnecting::after{animation:none}}
 #c1{grid-area:l1}#c2{grid-area:l2}#c3{grid-area:l3}
 .mon{grid-area:mon;padding:10px 14px;display:flex;flex-direction:column}
 .mon .hd{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font:600 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
@@ -133,6 +141,7 @@ const money = (f, v) => (f === "amount_minor" && Number.isInteger(v) ? (v / 100)
 
 let S = null, alerts = [], events = [], mism = [], acts = [], lastAct = 0, offset = 0;
 let view = 0, pinned = false, prevCaught = { 1: 0, 2: 0, 3: 0 };
+let layer3WasActive = false, layer3Disconnecting = false;
 
 async function j(p) { const r = await fetch(p, { cache: "no-store" }); if (!r.ok) throw new Error(r.status); return r.json(); }
 
@@ -151,11 +160,21 @@ function layerState() {
 function renderCards(ls) {
   for (const n of [1, 2, 3]) {
     const c = $("c" + n), s = ls[n];
-    c.className = `panel card ${s.st}${view === n ? " active" : ""}`;
-    c.querySelector(".st").textContent = s.st === "caught" ? (n === 3 ? "QUARANTINED" : `CAUGHT · ${s.n}`) : s.st === "passed" ? "PASSED" : "IDLE";
-    c.querySelector(".when").textContent = s.st === "caught" && s.t ? "fired " + clock(s.t) : "";
+    const justWentActive = n === 3 && s.st === "caught" && !layer3WasActive;
+    if (justWentActive) {
+      layer3Disconnecting = true;
+      setTimeout(() => { layer3Disconnecting = false; renderAll(); }, 2000);
+    }
+    if (n === 3) layer3WasActive = s.st === "caught";
+    const disconnecting = n === 3 && layer3Disconnecting;
+    c.className = `panel card ${s.st}${view === n ? " active" : ""}${disconnecting ? " disconnecting" : ""}`;
+    c.querySelector(".st").textContent = disconnecting ? "DISCONNECTING…"
+      : s.st === "caught" ? (n === 3 ? "QUARANTINED" : `CAUGHT · ${s.n}`) : s.st === "passed" ? "PASSED" : "IDLE";
+    c.querySelector(".when").textContent = disconnecting ? "severing network access"
+      : s.st === "caught" && s.t ? "fired " + clock(s.t) : "";
     if (s.n > prevCaught[n] && !pinned) view = n;  // auto-switch to the layer that just caught something
     prevCaught[n] = s.n;
+    if (justWentActive && !pinned) view = 3;
   }
 }
 
@@ -279,16 +298,24 @@ function screen3() {
   const acts = last.filter((e) => e.detail && e.detail.quarantine_id === q.id && e.trigger === "quarantine:locked");
   const actions = acts.length ? [...(acts[0].detail.site_down || []), ...(acts[0].detail.lockout || [])] : [];
   const dry = acts.length && acts[0].detail.dry_run;
-  const status = q.unlock_issued ? "Unlock signed by the witness. Waiting for the server to apply it…"
-    : approved >= q.needed ? "Approvals complete. Unlock will be signed once the server reports in."
-    : `${q.needed} of ${q.holders.length} approvals needed to unlock.`;
-  return `<p class="quar">${q.confirmed ? (dry ? "Layer 3 triggered (dry run). No account was logged out." : "Banking server has quarantined itself.") : "The witness has lost contact with the banking server."}</p>
+  const demoAccount = acts.length && acts[0].detail.demo_account;
+  const status = dry
+    ? (q.unlock_issued ? "Unlock signed by the witness. Waiting for the server to apply it…"
+      : approved >= q.needed ? "Approvals complete. Unlock will be signed once the server reports in."
+      : `${q.needed} of ${q.holders.length} approvals needed to unlock.`)
+    : (approved >= q.needed
+      ? "Website approval recorded. This page cannot reach ct105 — the demo account is only really restored by running unlock.sh there with 2 of the 3 printed keys."
+      : `${q.needed} of ${q.holders.length} website approvals recorded (for demonstration). The real unlock runs on ct105 itself: unlock.sh with 2 of the 3 printed keys.`);
+  const headline = !q.confirmed ? "The witness has lost contact with the banking server."
+    : dry ? "Layer 3 triggered (dry run). No account was logged out."
+    : `Layer 3 triggered: the demo account <b>${esc(demoAccount)}</b> was really logged out and disabled. Nothing else on the server was touched.`;
+  return `<p class="quar">${headline}</p>
   <p class="sub">${q.confirmed ? `Server confirmed quarantine <b>${esc(q.id)}</b>${acts.length && acts[0].detail.reason ? ": " + esc(acts[0].detail.reason) : ""}.` : "Reported by the witness: no contact with the server for over " + q.after + " s."} Since ${clock(q.since)}.</p>
   <div class="ev">
     <div class="stat"><div class="k">Verified and stored on witness</div><div class="v ok">#1 – #${lv ? lv.seq : 0}</div><div class="k">${lv ? "up to " + isoClock(lv.time) : ""}</div></div>
     <div class="stat"><div class="k">Unverified since cut</div><div class="v bad">${q.unverified == null ? "unknown" : q.unverified + " records"}</div><div class="k">${q.unverified == null ? "held on the server until the network is back" : "received after reconnect, being verified"}</div></div>
   </div>
-  ${actions.length ? `<h3 style="margin-top:20px">${dry ? "What Layer 3 would do" : "What the server did"}${dry ? ' <span class="empty">(dry run: recorded, nothing executed)</span>' : ""}</h3><ul class="feed cols">${actions.map((r) => `<li><span class="okc">${dry ? "•" : "✓"}</span> ${esc(r.cmd)}</li>`).join("")}</ul>` : ""}
+  ${actions.length ? `<h3 style="margin-top:20px">${dry ? "What Layer 3 would do" : "What Layer 3 did"}${dry ? ' <span class="empty">(dry run: recorded, nothing executed)</span>' : ' <span class="empty">(✓ really done · • planned only, not executed)</span>'}</h3><ul class="feed cols">${actions.map((r) => `<li><span class="okc">${dry || !r.cmd.startsWith("REAL:") ? "•" : "✓"}</span> ${esc(r.cmd.replace(/^REAL: /, ""))}</li>`).join("")}</ul>` : ""}
   <h3 style="margin-top:20px">Key holders</h3>
   <table class="holders"><tbody>${holders}</tbody></table>
   <p class="need">${status}</p>`;
@@ -375,7 +402,8 @@ function drawMonitor() {
 function renderAll() {
   if (!S) return;
   const conn = S.quarantine && S.quarantine.active ? "quarantined" : S.connection;
-  $("conn").className = "conn " + conn; $("conn").textContent = conn.toUpperCase();
+  $("conn").className = "conn " + conn;
+  $("conn").textContent = conn === "quarantined" && layer3Disconnecting ? "NETWORK OFFLINE" : conn.toUpperCase();
   renderCards(layerState()); renderMain();
 }
 

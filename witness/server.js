@@ -521,12 +521,21 @@ export const createWitnessServer = (store) =>
         const approvals = store.holderApprovals.size;
         if (approvals >= 2) {
           store.holderApprovals.clear();
+          // Website approval only ever records the vote: the witness cannot reach back into ct105.
+          // A real (non-dry-run) lockout is only actually reversed by running unlock.sh with 2 of the
+          // 3 printed keys on ct105 itself; say that plainly instead of implying this button did it.
+          const lockedEvent = store.recentLayerEvents().find(
+            (item) => item.layer === 3 && item.trigger === 'quarantine:locked' && item.detail.quarantine_id === state.id
+          );
+          const wasReal = lockedEvent && lockedEvent.detail.dry_run === false;
           await store.recordLayerEvent({
             layer: 3,
             trigger: 'quarantine:released',
             state: 'normal',
-            summary: 'quarantine released after two key-holder approvals (dry run: nothing had been locked)',
-            detail: { quarantine_id: state.id || '', dry_run: true },
+            summary: wasReal
+              ? 'two key-holders approved on the website; the demo account on ct105 is only really restored by running unlock.sh there with 2 of the 3 keys'
+              : 'quarantine released after two key-holder approvals (dry run: nothing had been locked)',
+            detail: { quarantine_id: state.id || '', dry_run: !wasReal, website_approval_only: wasReal },
             who: {}
           });
         }

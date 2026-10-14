@@ -46,6 +46,13 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "layer3"))
 import l3_config_guard as config_guard  # noqa: E402
 import l3_quarantine  # noqa: E402
+import l3_lockout  # noqa: E402
+import demo_keys  # noqa: E402
+
+# When Layer 3 fires automatically, push the demo account out for real (see l3_lockout.py: it refuses
+# to touch anything but that one non-root account, however this is set). Set to "0" to fall back to the
+# pure dry-run report instead, e.g. while testing on a host with no demo account.
+LAYER3_REAL_LOCKOUT = os.environ.get("COC_LAYER3_REAL_LOCKOUT", "1") == "1"
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "layer2"))
 import bank_reader  # noqa: E402
@@ -432,6 +439,23 @@ def layer3_trigger_reason():
     return None
 
 
+def respond_to_layer3(reason):
+    """Build the layer-3 event for a newly-detected compromise: a real, demo-account-only lockout when
+    LAYER3_REAL_LOCKOUT is on and the demo account exists, otherwise the dry-run report. Never raises:
+    an unsafe or missing target falls back to the dry run rather than taking any real action."""
+    if LAYER3_REAL_LOCKOUT:
+        try:
+            event, locked = l3_lockout.lock(reason)
+            log(f"LAYER 3 (real, demo account only): {reason}; locked={locked}")
+            for holder, key in demo_keys.DEMO_KEYS.items():
+                log(f"  unlock key — {holder}: {key}")
+            return event
+        except l3_lockout.UnsafeTarget as error:
+            log(f"LAYER 3 real lockout refused ({error}); falling back to a dry-run report")
+    log(f"LAYER 3 (dry run): {reason}")
+    return l3_quarantine.run_dry(reason)
+
+
 # ---------- main loop ----------
 
 def run():
@@ -482,8 +506,7 @@ def run():
             reason = layer3_trigger_reason()
             if reason and not layer3_reason:
                 layer3_reason = reason
-                pending.append(l3_quarantine.run_dry(reason))  # a dry run: recorded, nothing executed
-                log(f"LAYER 3 (dry run): {reason}")
+                pending.append(respond_to_layer3(reason))
             elif not reason and layer3_reason:
                 log("layer 3 conditions cleared; armed again")
                 layer3_reason = None

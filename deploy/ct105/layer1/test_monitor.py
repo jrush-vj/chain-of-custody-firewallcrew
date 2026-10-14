@@ -5,6 +5,7 @@ import os
 import tempfile
 import time
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 
@@ -143,6 +144,40 @@ class Layer3TriggerTests(unittest.TestCase):
             self.assertIn("simulated network cut", str(caught.exception))
         finally:
             os.remove(flag)
+
+
+class Layer3ResponseTests(unittest.TestCase):
+    """respond_to_layer3: the real lockout when it's safe to do, the dry run when it is not — and it
+    must never raise, so an unsafe target can never crash the monitor's loop."""
+
+    def setUp(self):
+        self.saved_real = monitor.LAYER3_REAL_LOCKOUT
+
+    def tearDown(self):
+        monitor.LAYER3_REAL_LOCKOUT = self.saved_real
+
+    def test_calls_the_real_lockout_when_enabled(self):
+        monitor.LAYER3_REAL_LOCKOUT = True
+        fake_event = {"layer": 3, "trigger": "quarantine:locked", "detail": {"dry_run": False}}
+        with unittest.mock.patch.object(monitor.l3_lockout, "lock", return_value=(fake_event, True)) as lock:
+            with unittest.mock.patch.object(monitor.l3_quarantine, "run_dry") as run_dry:
+                event = monitor.respond_to_layer3("no contact with the witness for 50 s")
+        lock.assert_called_once()
+        run_dry.assert_not_called()
+        self.assertEqual(event, fake_event)
+
+    def test_falls_back_to_dry_run_when_the_demo_account_is_unsafe_or_missing(self):
+        monitor.LAYER3_REAL_LOCKOUT = True
+        with unittest.mock.patch.object(monitor.l3_lockout, "lock", side_effect=monitor.l3_lockout.UnsafeTarget("no such account")):
+            event = monitor.respond_to_layer3("approved witness link settings changed: WITNESS_URL")
+        self.assertEqual(event["detail"]["dry_run"], True)
+
+    def test_uses_the_dry_run_when_real_lockout_is_switched_off(self):
+        monitor.LAYER3_REAL_LOCKOUT = False
+        with unittest.mock.patch.object(monitor.l3_lockout, "lock") as lock:
+            event = monitor.respond_to_layer3("test reason")
+        lock.assert_not_called()
+        self.assertEqual(event["detail"]["dry_run"], True)
 
 
 if __name__ == "__main__":

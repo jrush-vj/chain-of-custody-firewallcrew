@@ -491,6 +491,54 @@ ${body}`)
   }
 });
 
+test('a real (non-dry-run) lockout cannot be claimed released by website approval alone', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-l3-real-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const getJson = async (route) => (await fetch(`${baseUrl}${route}`)).json();
+  const approve = (holder) => fetch(`${baseUrl}/quarantine/approve`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ holder })
+  });
+
+  try {
+    await store.recordLayerEvent({
+      layer: 3,
+      trigger: 'quarantine:locked',
+      state: 'alert',
+      summary: 'Layer 3: no contact with the witness for 50 s — demo account coc-demo-intruder locked out',
+      detail: {
+        quarantine_id: 'q-real-1',
+        reason: 'no contact with the witness for 50 s',
+        dry_run: false,
+        demo_account: 'coc-demo-intruder',
+        site_down: 'docker compose stop frontend',
+        lockout: 'REAL: ended 1 session(s) for demo account coc-demo-intruder\nREAL: disabled login for coc-demo-intruder (password locked + expired)'
+      },
+      who: {}
+    });
+    const locked = (await getJson('/timeline')).events.find((event) => event.trigger === 'quarantine:locked');
+    assert.equal(locked.detail.dry_run, false);
+    assert.equal(locked.detail.demo_account, 'coc-demo-intruder');
+
+    await approve(0);
+    await approve(1);
+    const released = (await getJson('/timeline')).events.find((event) => event.trigger === 'quarantine:released');
+    assert.equal(released.detail.dry_run, false, 'the release record must not claim this was a dry run');
+    assert.equal(released.detail.website_approval_only, true);
+    assert.match(released.detail.summary, /unlock\.sh/, 'the summary must point at the real ct105-side unlock, not claim this page did it');
+    assert.doesNotMatch(released.detail.summary, /nothing had been locked/i, 'must not claim nothing was locked when something really was');
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('shows a dry-run quarantine from ct105, releases it on two approvals, and presumes one on silence', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-l3-'));
   const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
