@@ -95,7 +95,7 @@ button.ap:disabled{opacity:.35;cursor:default}
 <body>
 <div class="app">
   <div class="top"><h1>Chain of Custody · Witness <span>auditor view</span></h1>
-    <div class="topr"><div class="pv" id="pv" role="group" aria-label="Preview"><span>Preview</span><button data-pv="live" aria-pressed="true">Live</button><button data-pv="normal">Normal</button><button data-pv="l1">Layer 1</button><button data-pv="l2">Layer 2</button><button data-pv="l3">Layer 3</button></div><span class="conn" id="conn">CONNECTING</span></div></div>
+    <div class="topr"><div class="pv" id="pv" role="group" aria-label="Preview"><span>Preview</span><button data-pv="live" aria-pressed="true">Live</button><button data-pv="l1">Layer 1</button><button data-pv="l2">Layer 2</button><button data-pv="l3">Layer 3</button></div><span class="conn" id="conn">CONNECTING</span></div></div>
   <section class="panel main" id="main" aria-live="polite"></section>
   <button class="panel card idle" id="c1" data-layer="1"><span class="lbl">Layer 1</span><span class="nm">Custom commands</span><span class="ds">Guarded commands need the team's profile-id</span><span class="when"></span><span class="st">IDLE</span></button>
   <button class="panel card idle" id="c2" data-layer="2"><span class="lbl">Layer 2</span><span class="nm">Heartbeat &amp; checksum</span><span class="ds">Sealed records, random checks, truth check</span><span class="when"></span><span class="st">IDLE</span></button>
@@ -167,6 +167,7 @@ function screen1() {
   if (!rows.length) return `<h2>Layer 1 · Custom commands</h2><p class="sub">No commands seen yet. The team uses <code>&lt;cmd&gt; --&lt;profile-id&gt;</code>; anything else trips.</p>`;
   const last = [...rows].reverse().find((e) => e.state === "alert");
   const diffEv = [...rows].reverse().find((e) => e.detail && e.detail.diff);
+  const snapEv = [...rows].reverse().find((e) => e.detail && e.detail.approved_content !== undefined);
   const body = rows.slice(-14).reverse().map((e) => {
     const d = e.detail || {}, w = e.who || {};
     return `<tr class="${e.state === "alert" ? "hit" : ""}"><td class="m">${isoClock(e.time)}</td><td>${esc(w.user || (w.uid ?? "—"))}</td><td class="m">${esc(w.src_ip || "local")}</td><td class="m">${esc(d.cmd || e.trigger)}</td><td>${esc(d.result || (e.state === "alert" ? "caught" : "logged"))}</td></tr>`;
@@ -175,7 +176,8 @@ function screen1() {
   return `<h2>Layer 1 · Custom commands</h2><p class="sub">Command log from the server</p>
   <table><thead><tr><th>Time</th><th>User</th><th>Source IP</th><th>Command</th><th>Result</th></tr></thead><tbody>${body}</tbody></table>
   ${last ? `<div class="rule">Rule broken: ${esc(last.detail.rule || "Command not in the allowed command set")}.</div>` : ""}
-  ${diffEv ? `<p class="sub" style="margin:16px 0 0">What the intruder tried to change (they edited a decoy; the real log is untouched):</p>${diff}` : ""}`;
+  ${snapEv ? `<p class="sub" style="margin:16px 0 0">${esc(snapEv.detail.file || "log")}: original (approved) vs now</p><div class="ev"><div><b>Original</b><pre class="diff">${esc(snapEv.detail.approved_content || "(empty)")}</pre></div><div><b>Now</b><pre class="diff">${esc(snapEv.detail.current_content || "(file removed)")}</pre></div></div>` : ""}
+  ${diffEv ? `<p class="sub" style="margin:16px 0 0">Changes, original → now</p>${diff}` : ""}`;
 }
 
 function screen2() {
@@ -376,7 +378,7 @@ function buildPreview(scenario) {
   }
   if (scenario === "l3") {
     const holders = ["SOC lead", "Auditor", "Compliance officer"].map((name, i) => ({ name, approved: approvals.has(i) }));
-    if (approvals.size >= 2) { approvals.clear(); setTimeout(() => setMode("normal"), 1500); }
+    if (approvals.size >= 2) { approvals.clear(); setTimeout(() => setMode("live"), 1500); }
     S.connection = "lost"; S.heartbeat_age = 52; S.state = "quarantined"; S.layers[3] = "quarantined";
     S.checks.B = "red"; S.last_verified = { seq: 128, time: iso(now - 52) };
     S.quarantine = { active: true, since: now - 52, confirmed: false, id: null, unverified: null, after: 45, needed: 2, holders, unlock_issued: false };
@@ -396,7 +398,7 @@ function setMode(m) {
 }
 $("pv").addEventListener("click", (e) => { const b = e.target.closest("button[data-pv]"); if (b) setMode(b.dataset.pv); });
 
-if (["#normal", "#l1", "#l2", "#l3"].includes(location.hash)) setMode(location.hash.slice(1));
+if (["#l1", "#l2", "#l3"].includes(location.hash)) setMode(location.hash.slice(1));
 poll(); setInterval(() => (mode === "live" ? poll() : (buildPreview(mode), renderAll())), 1000);
 (function loop() { drawMonitor(); requestAnimationFrame(loop); })();
 </script>

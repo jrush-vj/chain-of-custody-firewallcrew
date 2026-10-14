@@ -144,6 +144,7 @@ const auditorLayerEvents = (store) => store.recentLayerEvents().map((record) => 
   trigger: record.trigger,
   state: record.state,
   time: toEpochSeconds(record.recorded_at),
+  who: record.who || {},
   detail: { ...record.detail, summary: record.summary }
 }));
 
@@ -184,9 +185,10 @@ const auditorMismatches = (store) => {
 };
 
 const validateLayerEvent = (event) => {
-  const fields = ['layer', 'trigger', 'state', 'kind', 'summary', 'detail'];
+  const fields = ['layer', 'trigger', 'state', 'kind', 'summary', 'detail', 'who'];
   const required = ['layer', 'trigger', 'state', 'summary'];
   const detail = event?.detail ?? {};
+  const who = event?.who ?? {};
   const invalid = (message) => {
     const error = new Error(message);
     error.statusCode = 400;
@@ -225,6 +227,15 @@ const validateLayerEvent = (event) => {
     ))
   ) {
     invalid('detail must be a flat object of up to 20 short values');
+  }
+  if (
+    typeof who !== 'object' || Array.isArray(who) || Object.keys(who).length > 10 ||
+    Object.values(who).some((value) => !(
+      (typeof value === 'string' && value.length <= 200) ||
+      (typeof value === 'number' && Number.isFinite(value))
+    ))
+  ) {
+    invalid('who must be a flat object of up to 10 short values');
   }
 };
 
@@ -379,7 +390,8 @@ export const createWitnessServer = (store) =>
           state: payload.state,
           ...(payload.layer === 2 && { kind: payload.kind }),
           summary: payload.summary,
-          detail: payload.detail ?? {}
+          detail: payload.detail ?? {},
+          who: payload.who ?? {}
         });
         return sendJson(response, 200, { status: 'recorded', seq: record.seq });
       }

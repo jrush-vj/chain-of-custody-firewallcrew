@@ -308,7 +308,8 @@ test('ingests signed Layer 1 and Layer 2 events into the ledger and dashboard fe
     trigger: 'wrapper:nano',
     state: 'alert',
     summary: 'nano ran against /var/log/bank without the profile id',
-    detail: { cmd: 'nano /var/log/bank/app.log', mode: 'deception' }
+    detail: { cmd: 'nano /var/log/bank/app.log', mode: 'deception' },
+    who: { user: 'root', auid: '1000', src_ip: 'local' }
   };
   const tamper = {
     layer: 2,
@@ -333,6 +334,7 @@ test('ingests signed Layer 1 and Layer 2 events into the ledger and dashboard fe
 
     const timeline = (await (await fetch(`${baseUrl}/timeline`)).json()).events;
     assert.ok(timeline.some((event) => event.layer === 1 && event.state === 'alert' && event.detail.cmd));
+    assert.ok(timeline.some((event) => event.layer === 1 && event.who?.user === 'root'));
 
     const status = await (await fetch(`${baseUrl}/status`)).json();
     assert.equal(status.layers[1], 'off');
