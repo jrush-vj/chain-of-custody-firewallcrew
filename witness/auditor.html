@@ -107,7 +107,8 @@ button.ap:disabled{opacity:.35;cursor:default}
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
-const isoClock = (s) => { const d = new Date(s); return isNaN(d) ? esc(s) : d.toLocaleTimeString([], { hour12: false }); };
+// Accepts an ISO string, or epoch seconds (layer events arrive as seconds; transaction events as ISO).
+const isoClock = (s) => { const d = new Date(typeof s === "number" ? s * 1000 : s); return isNaN(d) ? esc(s) : d.toLocaleTimeString([], { hour12: false }); };
 const L2_KINDS = new Set(["sequence_gap", "chain_break", "bad_signature", "unknown_key_id", "entry_edited", "entry_deleted",
   "entries_reordered", "entry_replayed", "late_entry", "challenge_mismatch", "bad_challenge_signature", "record_mismatch",
   "non_monotonic_timestamp", "silence", "missed_challenge", "bad_heartbeat", "replayed_heartbeat", "balance_misreported", "db_edited_without_log"]);
@@ -238,8 +239,8 @@ $("main").addEventListener("click", async (e) => {
 for (const n of [1, 2, 3]) $("c" + n).addEventListener("click", () => { view = view === n ? 0 : n; pinned = view !== 0; renderAll(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" || e.key === "0") { view = 0; pinned = false; renderAll(); } });
 
-// Heartbeat monitor: 90 s scrolling window. Up spike = witness asks (labelled #N), down spike = answer.
-const WINDOW = 60;
+// Heartbeat monitor: 120 s scrolling window, so several 30 s heartbeats are visible. Up spike = witness asks, down spike = answer.
+const WINDOW = 120;
 function label(detail) {
   const m = /record #(\d+)/.exec(detail) || /sweep #(\d+)-#(\d+)/.exec(detail);
   if (m && m[2]) return `#${m[1]}–${m[2]}`;
