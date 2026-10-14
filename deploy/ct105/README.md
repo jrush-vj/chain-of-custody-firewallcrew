@@ -73,6 +73,36 @@ fast-forward updates. Failed builds/health checks leave the commit marked
 undeployed, so a later timer run retries. Check status and logs before pushing
 another release.
 
+## Applying a repository release on ct105
+
+For a dashboard-only Oracle release, ct105 only needs the new root commit and
+the submodule revision pinned by it; no banking containers need rebuilding.
+On ct105, first confirm the checkout is clean. Then pause the timer while the
+deployment service advances the checkout and the submodule:
+
+```bash
+sudo git -C /opt/chain-of-custody branch --show-current
+sudo git -C /opt/chain-of-custody status --short
+test "$(sudo git -C /opt/chain-of-custody branch --show-current)" = main
+test -z "$(sudo git -C /opt/chain-of-custody status --porcelain)"
+sudo systemctl stop banking-deploy.timer
+trap 'sudo systemctl start banking-deploy.timer' EXIT
+sudo systemctl start banking-deploy.service
+sudo git -C /opt/chain-of-custody submodule update --init --recursive
+sudo git -C /opt/chain-of-custody status --short
+sudo systemctl start banking-deploy.timer
+trap - EXIT
+sudo systemctl status banking-deploy.timer --no-pager
+curl --fail https://witness.jrushvj.dev/health
+```
+
+If the initial status check shows local changes, do not pull over them; inspect
+and preserve them first. The deployment service will rebuild the banking
+stack only if `banking-system/` changed, and the submodule update checks out
+the exact cybersec commit recorded by the root repository. Do not run `docker
+compose down`, remove volumes, or rebuild PostgreSQL for an Oracle dashboard
+change.
+
 The transaction API requires a successful Oracle `prepare` acknowledgement
 before committing deposits, withdrawals, transfers, and external payments.
 If the witness is unavailable at that stage, PostgreSQL rolls back the

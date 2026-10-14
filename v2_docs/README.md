@@ -67,6 +67,7 @@ once:
 
 ## Source documents
 
+- [Cybersec integration handoff (2026-10-14)](./CYBERSEC_INTEGRATION_HANDOFF_2026-10-14.md)
 - [v2 architecture and build plan](./chain-of-custody-plan-v2.md)
 - [Cloudflare architecture notes](./CLOUDFLARE_ARCHITECTURE.md)
 - [Banking deployment and compliance notes](./BANKING_DEPLOYMENT.md)
