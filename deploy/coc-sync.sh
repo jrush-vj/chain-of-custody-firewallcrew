@@ -12,7 +12,7 @@ set -euo pipefail
 repo="${1:?usage: coc-sync.sh <repo-dir> witness|check}"
 role="${2:?usage: coc-sync.sh <repo-dir> witness|check}"
 witness_dir="${WITNESS_DIR:-/opt/banking-witness}"
-witness_files=(server.js auditor.html store.js reconcile.js package.json)
+witness_files=(server.js auditor.html store.js reconcile.js records.js banksync.js package.json)
 
 case "$role" in
   witness|check) ;;

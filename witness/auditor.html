@@ -250,16 +250,18 @@ function screen2() {
     : shown.filter((k) => changed.has(k)).map((k) => k === "event_id"
         ? `<b>${NAMES[k]}</b>: characters ${diffRanges(w[k], f[k])} differ`
         : `<b>${NAMES[k]}</b> ${esc(money(k, w[k]))} → ${esc(money(k, f[k]))}${deltaText(k, w[k], f[k])}`);
-  const window = m.last_matched_time
+  const window = m.issue === "unwitnessed"
+    ? `First seen in the bank at <b>${clock(m.first_seen_time || m.caught_time)}</b>. The bank has not sent a witnessed commit for it.`
+    : m.last_matched_time
     ? `Matched the bank at <b>${clock(m.last_matched_time)}</b>, first differed at <b>${clock(m.first_seen_time)}</b> (a ${Math.max(0, Math.round(m.first_seen_time - m.last_matched_time))} s window).`
     : `First seen at <b>${clock(m.first_seen_time || m.caught_time)}</b>. No earlier match is on record since the witness started watching.`;
   const rest = mism.slice(1);
   return `<div class="rec-head"><h2>Record #${m.seq}</h2><span class="t">Caught by ${esc(m.caught_by.replace(/ \(c-[0-9a-f]+\)/, ""))} at ${clock(m.caught_time)}</span></div>
   <p class="sub" style="margin:6px 0 0">${window}</p>
   <p class="what"><b>What changed:</b> ${what.join(" &nbsp;·&nbsp; ")}</p>
+  ${recordsLine()}
   <div class="cmp four"><div class="h">Field</div><div class="h">${ph ? `Last healthy · #${ph.seq}` : "Last healthy"}</div><div class="h">Witness copy · #${m.seq}</div><div class="h">Bank now · #${m.seq}</div>${rows}</div>
   <p class="sub" style="margin:10px 0 0">${ph ? `Record #${ph.seq} is the nearest earlier record that matched the bank (verified ${clock(ph.verified_time)}).` : "No earlier record matched the bank in this pass, so there is no healthy record to compare with."}</p>
-  ${recordsLine()}
   ${rest.length ? `<div class="more"><h3>Also tampered (found in the sweep)</h3><ul>${rest.map((x) => `<li>#${x.seq} · ${esc(x.fields.length ? x.fields.map((k) => NAMES[fieldKey(k)] || k).join(", ") : "record")}: ${x.server_copy ? x.fields.map((k) => { const key = fieldKey(k); return esc(money(key, x.witness_copy[key])) + " → " + esc(money(key, x.server_copy[key])); }).join(", ") : "missing on server"}</li>`).join("")}</ul></div>` : ""}
   ${otherList}`;
 }

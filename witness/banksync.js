@@ -10,7 +10,8 @@ import { amountMinor, changedFields, parseRanges, rowHash, validateRow } from '.
 export const SWEEP_LIMIT = 60;
 export const NEED_LIMIT = 40;
 export const ROWS_LIMIT = 40;
-export const UNWITNESSED_GRACE_MS = 120_000;
+// How long a copied row may go without a witnessed commit before it is reported.
+export const UNWITNESSED_GRACE_MS = Number(process.env.WITNESS_UNWITNESSED_GRACE_S || 120) * 1000;
 
 const bad = (message) => {
   const error = new Error(message);
@@ -85,8 +86,11 @@ export const evaluateHeartbeat = async (store, bank, nowMs = Date.now()) => {
     if (!copy) continue;
     if (hash !== rowHash(copy)) {
       if (!store.openEvidence('entry_edited', id)) suspects.push(id);
-    } else if (store.openEvidence('entry_edited', id)) {
-      await resolve(store, 'entry_edited', id, 'the bank row matches its copy again');
+    } else {
+      store.copyMatchedAt.set(id, nowMs);
+      if (store.openEvidence('entry_edited', id)) {
+        await resolve(store, 'entry_edited', id, 'the bank row matches its copy again');
+      }
     }
   }
 
@@ -159,6 +163,7 @@ export const receiveRows = async (store, rows, nowMs = Date.now()) => {
       continue;
     }
     if (rowHash(row) === rowHash(copy)) {
+      store.copyMatchedAt.set(row.id, nowMs);
       if (store.openEvidence('entry_edited', row.id)) {
         await resolve(store, 'entry_edited', row.id, 'the bank row matches its copy again');
       }
@@ -173,6 +178,7 @@ export const receiveRows = async (store, rows, nowMs = Date.now()) => {
 
   if (fresh.baseline.length) await store.recordCopies(fresh.baseline, true);
   if (fresh.late.length) await store.recordCopies(fresh.late, false);
+  for (const row of [...fresh.baseline, ...fresh.late]) store.copyMatchedAt.set(row.id, nowMs);
   if (store.bankView) await markBaselineComplete(store, store.bankView.present);
 
   const need = store.bankView ? missingCopies(store, store.bankView.present).slice(0, NEED_LIMIT) : [];
@@ -228,6 +234,7 @@ export const evidenceMismatches = (store) => {
       before,
       after,
       detected_at: item.recorded_at,
+      matched_before: store.copyMatchedAt.has(item.detail.record) ? new Date(store.copyMatchedAt.get(item.detail.record)).toISOString() : null,
       previous_healthy: earlier ? pick(earlier) : null,
       verified_at: store.bankView ? new Date(store.bankView.at).toISOString() : null
     };

@@ -289,7 +289,8 @@ const mergeEvidence = (store, reconciled) => {
       previous_healthy: item.previous_healthy
         ? { seq: item.previous_healthy.id, copy: rowView(item.previous_healthy, witnessedIds.get(item.previous_healthy.id)), verified_time: toEpochSeconds(item.verified_at) }
         : null,
-      last_matched_time: null,
+      // An unwitnessed row never matched anything, so it has no earlier match to report.
+      last_matched_time: unwitnessed ? null : toEpochSeconds(item.matched_before),
       first_seen_time: toEpochSeconds(item.detected_at)
     });
   }

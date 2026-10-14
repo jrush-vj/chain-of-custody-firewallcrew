@@ -32,6 +32,7 @@ export class WitnessStore {
     this.baselineComplete = false; // true once every baseline row has been copied
     this.bankView = null;        // the latest summary ct105 sent with a heartbeat
     this.currentHashes = new Map(); // id -> { hash, at } as last seen in the bank, from sweeps and received rows
+    this.copyMatchedAt = new Map(); // id -> ms: the last time the bank row matched its copy
     this.challengeBaselineSet = false;
     this.lastRandomChallengeAt = 0;
     this.restoreRequest = null;        // one pending website restore, picked up by ct105

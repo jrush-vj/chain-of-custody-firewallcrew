@@ -99,6 +99,8 @@ test('the witness keeps copies of the bank rows and catches an edit, a deletion 
     assert.equal(found.witness_copy.amount_minor, 20000);
     assert.equal(found.server_copy.amount_minor, 99900);
     assert.equal(found.previous_healthy.seq, 1, 'the nearest earlier copy with no finding against it');
+    assert.equal(typeof found.last_matched_time, 'number', 'the last good check of this row is known');
+    assert.ok(found.first_seen_time >= found.last_matched_time, 'and it came before the finding');
     assert.equal(store.copies.get(2).status, 'completed', 'the copy is kept as it was first seen');
     assert.equal(recordCounts(store).in_sync, false);
     assert.equal((await alerts()).some((alert) => alert.kind === 'entry_edited'), true);

@@ -47,6 +47,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import l3_config_guard as config_guard  # noqa: E402
 import l3_quarantine  # noqa: E402
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "layer2"))
+import bank_reader  # noqa: E402
+
 WATCH_DIR = os.environ.get("WATCH_DIR", "/var/log/bank-demo")
 STATE_DIR = os.environ.get("STATE_DIR", "/var/lib/coc-layer1")
 COMMANDS_SPOOL = os.environ.get("COMMANDS_SPOOL", "/var/spool/coc-layer1/commands.jsonl")
@@ -65,6 +68,11 @@ QUARANTINE_AFTER_S = float(os.environ.get("QUARANTINE_AFTER_S", "45"))
 # While this file exists every witness request fails, which simulates a cut network link in the demo.
 CUT_FLAG = os.environ.get("COC_WITNESS_CUT_FLAG", "/var/lib/coc-demo/witness-cut")
 _last_contact = time.time()
+# Send the witness a copy of the bank's transaction rows (allowlisted columns, read-only role).
+BANK_SYNC = os.environ.get("COC_BANK_SYNC", "1") == "1"
+ROWS_PER_POST = 40            # the witness accepts at most this many rows per request
+_sweep_position = 0           # where the rotating hash sample resumes
+_bank_error_logged_at = 0.0
 RESTORE_SCRIPT = os.environ.get("RESTORE_SCRIPT", "/opt/chain-of-custody/deploy/ct105/restore-normal.sh")
 WRAPPED_COMMANDS = ["nano", "vi", "vim", "sed", "rm", "mv", "cp", "truncate", "shred", "tee"]
 
@@ -341,19 +349,73 @@ def check_restore_request():
 
 # ---------- heartbeat ----------
 
+def collect_bank_view():
+    """The bank summary for this heartbeat, or None when it cannot be read. The heartbeat still goes
+    out without it: a missed heartbeat is itself an alert, so it must never wait on the database."""
+    global _sweep_position, _bank_error_logged_at
+    if not BANK_SYNC:
+        return None
+    try:
+        view, _sweep_position = bank_reader.build_view(_sweep_position)
+        return view
+    except bank_reader.BankReadError as error:
+        if time.time() - _bank_error_logged_at > 600:
+            log(f"bank view unavailable, sending the heartbeat without it: {error}")
+            _bank_error_logged_at = time.time()
+        return None
+
+
+def sync_rows(need):
+    """Send the rows the witness asked for, in rounds, until it has everything it needs."""
+    sent, stored = 0, None
+    for _ in range(20):
+        if not need:
+            break
+        try:
+            rows = bank_reader.rows_by_ids(need[:ROWS_PER_POST])
+        except bank_reader.BankReadError as error:
+            log(f"could not read the rows the witness asked for: {error}")
+            break
+        if not rows:
+            break  # they disappeared from the bank in the meantime; the witness will notice
+        body = json.dumps({"rows": rows}).encode("utf-8")
+        try:
+            with open_witness(signed_request("POST", "/v1/records", body), timeout=10) as response:
+                reply = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, OSError, ValueError) as error:
+            log(f"could not send rows to the witness: {error}")
+            break
+        sent += len(rows)
+        stored = reply.get("stored_count")
+        just_sent = {row["id"] for row in rows}
+        need = [i for i in reply.get("need_rows", []) if i not in just_sent]
+    if sent:
+        log(f"sent {sent} bank row(s) to the witness; it now holds {stored}")
+
+
 def send_heartbeat():
     """One signed heartbeat. Never queued or retried: a missed beat is what the witness watches for.
 
     seq is the clock in milliseconds, so it keeps rising across monitor restarts and the witness can
-    reject replays. It is sent whether or not anything is being tampered with.
+    reject replays. It is sent whether or not anything is being tampered with. When the bank can be
+    read, it also carries a compact view of the bank; the witness answers with the rows it still needs.
     """
-    body = json.dumps({"seq": int(time.time() * 1000), "interval_s": HEARTBEAT_S}).encode("utf-8")
+    payload = {"seq": int(time.time() * 1000), "interval_s": HEARTBEAT_S}
+    view = collect_bank_view()
+    if view is not None:
+        payload["bank"] = view
     try:
-        with open_witness(signed_request("POST", "/v1/heartbeat", body), timeout=5):
-            return True
-    except (urllib.error.URLError, OSError) as error:
+        with open_witness(signed_request("POST", "/v1/heartbeat", json.dumps(payload).encode("utf-8")), timeout=5) as response:
+            reply = json.loads(response.read().decode("utf-8") or "{}")
+    except (urllib.error.URLError, OSError, ValueError) as error:
         log(f"heartbeat not delivered: {error}")
         return False
+    if reply.get("sync_error"):
+        log(f"the witness rejected the bank view: {reply['sync_error']}")
+    need = (reply.get("sync") or {}).get("need_rows") or []
+    if need:
+        sync_rows(need)
+    return True
 
 
 # ---------- layer 3 ----------

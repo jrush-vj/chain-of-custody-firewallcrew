@@ -182,7 +182,29 @@ panel: `previous_healthy`, the nearest earlier witnessed record that matched the
 (proven healthy now, not assumed; `null` if there is none), and the tamper window, `last_matched_time`
 and `first_seen_time`, with at most one reconcile interval (10 s) of uncertainty. The window is held
 in memory, so after a witness restart it starts again from the first pass. The witness keeps only
-the type, amount, event id and transaction id of each record, so only those fields can be pinpointed.
+the type, amount, event id and transaction id of each record, so only those fields can be pinpointed
+from the four-field check. The copies below widen that.
+
+### Copies of the bank's rows
+
+ct105's heartbeat can carry a compact view of the bank (`bank`: row count, every id as ranges, and a
+hash for a rotating sample of 50 rows). The witness compares it with the copies it holds and replies
+with `sync.need_rows`; ct105 sends just those rows to `POST /v1/records` (at most 40 per request).
+
+- **What is copied:** only `id, type, amount, status, from_account_id, to_account_id, timestamp`. Any
+  other field is refused with a 400, so names, IBANs, account numbers and reference text cannot reach
+  the witness. On ct105 the read-only database role `coc_reader` is granted `SELECT` on exactly those
+  columns (`deploy/ct105/layer2/create-reader-role.sh`), so they cannot be read there either.
+- **Storage:** copies are `record_copy` entries in the same hash-chained ledger, so they survive
+  restarts and are covered by the startup integrity check. A copy is the first version seen and is
+  never overwritten. Rows that existed when copying began are the baseline.
+- **What it catches:** a row that differs from its copy (`entry_edited`, with the exact fields), a row
+  gone from the bank (`entry_deleted`), and a row that appeared without a witnessed commit within
+  `WITNESS_UNWITNESSED_GRACE_S` seconds (default 120; `db_edited_without_log`). Each resolves by itself
+  when the bank row matches again or the row is witnessed. The bank's admin CLI and seed script create
+  transactions without the witness, so rows they create are reported as unwitnessed, by design.
+- **What the page shows:** counts (bank rows, witness copies, witnessed events, last sync, open
+  findings) and, for a finding, only the fields that changed. Copied rows are never displayed.
 
 To update the Oracle witness from the repository's `main` branch, first check
 that the source checkout is clean. Do not discard local changes. Then run on
