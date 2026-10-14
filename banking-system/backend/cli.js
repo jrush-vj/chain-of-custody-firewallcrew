@@ -12,6 +12,12 @@ dotenv.config();
 
 const program = new Command();
 
+const rejectProductionCliTransaction = () => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('CLI money movement is disabled in production; use the witness-integrated API');
+  }
+};
+
 program
   .name('banking-cli')
   .description('Interactive CLI tool for banking system management')
@@ -275,6 +281,7 @@ program
   .option('-m, --amount <amount>', 'Amount')
   .action(async (options) => {
     try {
+      rejectProductionCliTransaction();
       let { accountId, amount } = options;
       
       if (!accountId || !amount) {
@@ -331,6 +338,7 @@ program
   .option('-m, --amount <amount>', 'Amount')
   .action(async (options) => {
     try {
+      rejectProductionCliTransaction();
       let { accountId, amount } = options;
       
       if (!accountId || !amount) {
@@ -398,6 +406,7 @@ program
   .option('-m, --amount <amount>', 'Amount')
   .action(async (options) => {
     try {
+      rejectProductionCliTransaction();
       let { from, to, amount } = options;
       
       if (!from || !to || !amount) {
@@ -1017,6 +1026,13 @@ async function handleTransactionOperations() {
   ]);
 
   if (operation === 'back') return;
+  if (
+    process.env.NODE_ENV === 'production' &&
+    ['deposit', 'withdraw', 'transfer'].includes(operation)
+  ) {
+    console.error('CLI money movement is disabled in production; use the witness-integrated API.');
+    return;
+  }
 
   await connectDB();
   try {

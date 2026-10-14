@@ -53,4 +53,7 @@ sudo journalctl -u banking-deploy.service -f
 
 [`v2_docs/README.md`](./v2_docs/README.md) records how the v2 three-layer plan
 is being adapted to the current hosting limits. Defense features in those
-documents are plans/prototypes, not part of this banking deployment.
+documents are plans/prototypes, not part of this banking deployment. The
+separate [`witness/`](./witness/) service is a lightweight Oracle-hosted demo
+receiver; deploy it before deploying the witness-required banking transaction
+integration.

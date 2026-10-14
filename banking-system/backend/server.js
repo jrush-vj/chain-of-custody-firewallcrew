@@ -16,6 +16,7 @@ import transactionRoutes from './routes/transactions.js';
 import scheduledPaymentRoutes from './routes/scheduledPayments.js';
 import paymentPortalRoutes from './routes/paymentPortal.js';
 import { sanitizeRequest } from './middleware/sanitize.js';
+import { startWitnessOutboxRetry } from './services/witnessedTransactions.js';
 
 dotenv.config();
 
@@ -81,6 +82,7 @@ const startServer = async () => {
   try {
     await connectDB();
     await createTables();
+    startWitnessOutboxRetry();
     
     // Check if SSL is enabled
     if (process.env.USE_SSL === 'true') {
@@ -131,6 +133,5 @@ process.on('SIGINT', async () => {
 });
 
 startServer();
-
 
 

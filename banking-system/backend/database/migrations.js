@@ -135,6 +135,24 @@ export const createTables = async () => {
     `);
 
     await pool.query(`
+      CREATE TABLE IF NOT EXISTS witness_outbox (
+        event_id UUID PRIMARY KEY,
+        transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
+        event JSONB NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending'
+          CHECK (status IN ('pending', 'confirmed')),
+        last_error TEXT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS IX_witness_outbox_pending
+        ON witness_outbox (created_at)
+        WHERE status = 'pending'
+    `);
+
+    await pool.query(`
       ALTER TABLE transactions
         ADD COLUMN IF NOT EXISTS external_from_name VARCHAR(150)
     `);
@@ -240,6 +258,7 @@ export const dropTables = async () => {
   
   try {
     await pool.query('DROP TABLE IF EXISTS scheduled_payments CASCADE');
+    await pool.query('DROP TABLE IF EXISTS witness_outbox CASCADE');
     await pool.query('DROP TABLE IF EXISTS transactions CASCADE');
     await pool.query('DROP TABLE IF EXISTS accounts CASCADE');
     await pool.query('DROP TABLE IF EXISTS users CASCADE');

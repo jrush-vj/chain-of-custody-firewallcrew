@@ -11,6 +11,7 @@ const Accounts = () => {
   const [formData, setFormData] = useState({ account_type: 'checking' });
   const [modalState, setModalState] = useState(null);
   const [modalMessage, setModalMessage] = useState('');
+  const [modalPending, setModalPending] = useState(false);
   const [modalLoading, setModalLoading] = useState(false);
 
   const fetchAccounts = useCallback(async () => {
@@ -61,11 +62,13 @@ const Accounts = () => {
       transferAccountId: ''
     });
     setModalMessage('');
+    setModalPending(false);
   };
 
   const closeModal = () => {
     setModalState(null);
     setModalMessage('');
+    setModalPending(false);
     setModalLoading(false);
   };
 
@@ -78,13 +81,25 @@ const Accounts = () => {
 
     setModalLoading(true);
     setModalMessage('');
+    setModalPending(false);
     try {
-      await apiClient.post('/api/transactions/transfer', {
+      const response = await apiClient.post('/api/transactions/transfer', {
         from_account_id: modalState.account.id,
         to_account_id: Number(modalState.transferAccountId),
         amount: parseFloat(modalState.account.balance)
       });
       await fetchAccounts();
+      if (response.data.witness_status === 'pending') {
+        setModalPending(true);
+        setModalMessage(
+          `${response.data.message} Account deletion is blocked until confirmation. ${
+            response.data.witness_event_id
+              ? `Witness event: ${response.data.witness_event_id}`
+              : ''
+          }`
+        );
+        return;
+      }
       setModalState((prev) => ({
         ...prev,
         stage: 'confirm',
@@ -92,7 +107,12 @@ const Accounts = () => {
       }));
       setModalMessage('Balance transferred. You can now delete the account.');
     } catch (err) {
-      setModalMessage(err.response?.data?.error || 'Unable to transfer remaining funds.');
+      setModalPending(err.response?.data?.witness_status === 'pending');
+      setModalMessage(
+        err.response?.data?.message ||
+          err.response?.data?.error ||
+          'Unable to transfer remaining funds.'
+      );
     } finally {
       setModalLoading(false);
     }
@@ -102,13 +122,30 @@ const Accounts = () => {
     if (!modalState?.account) return;
     setModalLoading(true);
     setModalMessage('');
+    setModalPending(false);
     try {
-      await apiClient.delete(`/api/accounts/${modalState.account.id}`);
+      const response = await apiClient.delete(`/api/accounts/${modalState.account.id}`);
+      if (response.data.witness_status === 'pending') {
+        setModalPending(true);
+        setModalMessage(
+          `${response.data.message} ${
+            response.data.witness_event_id
+              ? `Witness event: ${response.data.witness_event_id}`
+              : ''
+          }`
+        );
+        return;
+      }
       setAccounts((prev) => prev.filter((acc) => acc.id !== modalState.account.id));
       announceSuccess('Account deleted successfully.');
       closeModal();
     } catch (err) {
-      setModalMessage(err.response?.data?.error || 'Failed to delete account.');
+      setModalPending(err.response?.data?.witness_status === 'pending');
+      setModalMessage(
+        err.response?.data?.message ||
+          err.response?.data?.error ||
+          'Failed to delete account.'
+      );
     } finally {
       setModalLoading(false);
     }
@@ -252,7 +289,11 @@ const Accounts = () => {
                 </button>
               </div>
             )}
-            {modalMessage && <div className="modal-message">{modalMessage}</div>}
+            {modalMessage && (
+              <div className={`modal-message${modalPending ? ' pending-message' : ''}`}>
+                {modalMessage}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -2,7 +2,8 @@
 
 These files preserve the Firewall Crew v2/v3 planning material and prototypes.
 They are design inputs, not a claim that those features are deployed. The
-current production-like demo in this repository is the banking app only.
+banking app and a separate minimal Oracle witness are demo components; actual
+deployment state must be verified on the hosts.
 
 ## Hosting decisions for this deployment
 
@@ -12,10 +13,10 @@ current production-like demo in this repository is the banking app only.
 - **Cloudflare Tunnel:** remains the public route for `bank.jrushvj.dev` to
   `http://127.0.0.1:3001`. Tunnel credentials and DNS remain server-side and
   are never committed.
-- **Oracle VPS (1 GB RAM):** keep it idle or use it only for a lightweight
-  witness service if/when the defense component is reintroduced. Do not run a
-  banking database, build jobs, mock attack environment, feed simulator, or
-  evidence archive there.
+- **Oracle VPS (1 GB RAM):** use only the small standalone witness in
+  [`../witness/`](../witness/) if deployed. Do not run a banking database,
+  build jobs, mock attack environment, feed simulator, or evidence archive
+  there.
 - **Automatic deployment:** ct105 polls this repository's `main` branch with a
   systemd timer. It rebuilds/restarts only when `banking-system/` changes.
 
@@ -27,9 +28,10 @@ once:
 1. **Banking availability:** deploy the supplied banking application, verify
    PostgreSQL readiness and backend/frontend health, then verify the public
    Cloudflare hostname.
-2. **Independent witness:** reintroduce a small witness on Oracle only after a
-   compatible evidence producer and protocol are implemented and tested.
-   Keep the witness external to ct105's trust domain.
+2. **Independent witness:** the repository now contains a minimal bank-to-
+   Oracle prepare/commit flow with a PostgreSQL retry outbox and a separate
+   hash-chained witness ledger. It still requires deployment and end-to-end
+   testing. Keep the witness external to ct105's trust domain.
 3. **Sealed chain:** specify and test canonical event encoding, integer
    smallest-unit amounts, sequence/hash continuity, signing, key rotation, and
    crash recovery.
@@ -55,6 +57,11 @@ once:
   production witness or durable anchor.
 - `attacks/test_a10_anchor_tamper.py` exercises the local mock and does not
   prove an actual Cloudflare Worker deployment.
+- The standalone Oracle witness is a hackathon/demo service. HMAC credentials
+  reside on ct105 and can be read by ct105 root; a root-compromised banking
+  host can suppress or forge new events. The two-phase protocol exposes
+  pending outcomes but cannot make two independent databases atomically
+  commit.
 - The architecture and compliance notes are planning claims, not legal advice,
   certification, or evidence of regulatory compliance.
 

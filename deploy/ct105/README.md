@@ -26,11 +26,19 @@ sudo chmod 600 .env
 ```
 
 Set unique strong values for `DB_PASSWORD`, `JWT_SECRET`,
-`DATA_ENCRYPTION_KEY`, and `EXTERNAL_PAYMENTS_API_KEY`. Do not use sample
-values, and do not put `.env` in Git. `DATA_ENCRYPTION_KEY` must be at least 32
-characters.
+`DATA_ENCRYPTION_KEY`, `EXTERNAL_PAYMENTS_API_KEY`, and `WITNESS_HMAC_SECRET`.
+Do not use sample values, and do not put `.env` in Git.
+`DATA_ENCRYPTION_KEY` and `WITNESS_HMAC_SECRET` must each be at least 32
+characters. Set `WITNESS_URL=https://witness.jrushvj.dev` and
+`WITNESS_NODE_ID=ct105-ai`. Configure exactly the same witness HMAC secret in
+the Oracle witness service. Do not paste the secret into chat or commit it.
 If the repository is private, configure a read-only GitHub deploy key for the
 clone/service account before installing the polling timer.
+
+Follow [`../../witness/README.md`](../../witness/README.md) to deploy the
+Oracle witness first. Do not deploy the banking witness integration until
+`https://witness.jrushvj.dev/health` succeeds from ct105 and all three
+`WITNESS_*` values are set in `.env`.
 
 Validate and initially start the application:
 
@@ -64,6 +72,14 @@ The service refuses to overwrite local tracked changes and only accepts
 fast-forward updates. Failed builds/health checks leave the commit marked
 undeployed, so a later timer run retries. Check status and logs before pushing
 another release.
+
+The transaction API requires a successful Oracle `prepare` acknowledgement
+before committing deposits, withdrawals, transfers, and external payments.
+If the witness is unavailable at that stage, PostgreSQL rolls back the
+transaction. If the witness becomes unavailable after PostgreSQL commits, the
+API returns HTTP 202 with `witness_status: "pending"` and retries finalization
+from the PostgreSQL outbox. Do not resubmit a transaction with a pending or
+uncertain response until you have checked transaction history.
 
 After editing and testing locally, push to the repository's `main` branch.
 Within two minutes, ct105 fetches the commit, builds changed banking services,
