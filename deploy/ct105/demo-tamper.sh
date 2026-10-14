@@ -48,16 +48,20 @@ wait_for() {
   return 1
 }
 
-# 1. Pick one committed row that the witness already has, and make sure the witness is clean first.
-row="$(psql_q "SELECT t.id, t.amount, t.type FROM transactions t JOIN witness_outbox o ON o.transaction_id = t.id WHERE o.status = 'confirmed' ORDER BY t.id DESC LIMIT 1;")"
-[ -n "$row" ] || { echo "no confirmed witnessed transaction found"; exit 1; }
+# 1. Pick the newest committed row the witness is not already flagging (old evidence stays on
+#    the witness and must not block a new demo).
+before="$(witness_mismatches)"
+[ "$before" != ERROR ] || { echo "witness unreadable: $witness_url"; exit 1; }
+candidates="$(psql_q "SELECT t.id, t.amount, t.type FROM transactions t JOIN witness_outbox o ON o.transaction_id = t.id WHERE o.status = 'confirmed' ORDER BY t.id DESC LIMIT 30;")"
+row=""
+while IFS= read -r candidate; do
+  cid="${candidate%%|*}"
+  if [ -n "$cid" ] && [[ ",$before," != *",$cid,"* ]]; then row="$candidate"; break; fi
+done <<< "$candidates"
+[ -n "$row" ] || { echo "no clean witnessed transaction found (witness already flags: $before)"; exit 1; }
 IFS='|' read -r id old_amount txn_type <<< "$row"
 new_amount="$(python3 -c "from decimal import Decimal; print(Decimal('$old_amount') + Decimal('$tamper_delta'))")"
 echo "demo row: transaction #$id ($txn_type), amount $old_amount -> tampered to $new_amount"
-
-before="$(witness_mismatches)"
-[ "$before" != ERROR ] || { echo "witness unreadable: $witness_url"; exit 1; }
-if [[ ",$before," == *",$id,"* ]]; then echo "transaction #$id already mismatched; refusing"; exit 1; fi
 
 # 2. Restore function: only ever runs after a successful tamper, and verifies the restore.
 restore() {
