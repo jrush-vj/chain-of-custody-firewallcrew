@@ -13,6 +13,11 @@ export class WitnessStore {
     this.records = [];
     this.events = new Map();
     this.layerEvents = [];
+    // Activity feed: ledger records plus live heartbeat and challenge entries. Ids keep rising across
+    // restarts because the counter starts from the clock, so the auditor's since_id polling still works.
+    this.activity = [];
+    this.activityCounter = Date.now();
+    this.reportedMismatches = new Set();
     this.queue = Promise.resolve();
     this.integrityError = null;
     this.lastSuccessfulReconciliationAt = null;
@@ -74,6 +79,7 @@ export class WitnessStore {
       this.records = [];
       this.events.clear();
       this.layerEvents = [];
+      this.activity = [];
       this.integrityError = error.message;
       throw error;
     }
@@ -88,6 +94,35 @@ export class WitnessStore {
   }
 
   applyRecord(record) {
+    this.applyState(record);
+    this.noteActivity(record);
+  }
+
+  noteActivity(record) {
+    if (record.action === 'layer_event') {
+      this.pushActivity(`layer${record.payload.layer}_${record.payload.trigger}`, record.payload.summary, record.recorded_at);
+      return;
+    }
+    const event = this.events.get(record.payload.event_id)?.event;
+    const detail = event
+      ? `Transaction ${event.transaction_id} ${record.action} (${event.type}, ${event.amount_minor} minor units)`
+      : `Transaction event ${record.payload.event_id} ${record.action}`;
+    this.pushActivity(`witness_${record.action}`, detail, record.recorded_at);
+  }
+
+  pushActivity(kind, detail, at = new Date().toISOString()) {
+    this.activityCounter += 1;
+    this.activity.push({ id: this.activityCounter, time: Date.parse(at) / 1000, kind, detail });
+    if (this.activity.length > 500) {
+      this.activity.splice(0, this.activity.length - 500);
+    }
+  }
+
+  recordActivity(kind, detail) {
+    this.pushActivity(kind, detail);
+  }
+
+  applyState(record) {
     if (record.action === 'layer_event') {
       this.layerEvents.push({ id: record.seq, ...record.payload, recorded_at: record.recorded_at });
       return;
@@ -275,28 +310,6 @@ export class WitnessStore {
     if (this.integrityError) {
       return [];
     }
-    return this.records
-      .filter((record) => record.seq > sinceId)
-      .slice(-limit)
-      .map((record) => {
-        if (record.action === 'layer_event') {
-          return {
-            id: record.seq,
-            time: Date.parse(record.recorded_at) / 1000,
-            kind: `layer${record.payload.layer}_${record.payload.trigger}`,
-            detail: record.payload.summary
-          };
-        }
-        const eventId = record.payload.event_id;
-        const event = this.events.get(eventId)?.event;
-        return {
-          id: record.seq,
-          time: Date.parse(record.recorded_at) / 1000,
-          kind: `witness_${record.action}`,
-          detail: event
-            ? `Transaction ${event.transaction_id} ${record.action} (${event.type}, ${event.amount_minor} minor units)`
-            : `Transaction event ${eventId} ${record.action}`
-        };
-      });
+    return this.activity.filter((item) => item.id > sinceId).slice(-limit);
   }
 }

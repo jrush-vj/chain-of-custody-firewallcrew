@@ -129,10 +129,11 @@ test('accepts authenticated prepare/commit and publishes a safe event view', asy
     assert.equal(mismatches.mismatches[0].witness_copy.amount_minor, 50000);
     assert.equal(mismatches.mismatches[0].server_copy.amount_minor, 10000);
     const activity = await (await fetch(`${baseUrl}/activity?since_id=0`)).json();
-    assert.deepEqual(activity.activity.map(({ id }) => id), [1, 2]);
+    const activityIds = activity.activity.map(({ id }) => id);
+    assert.deepEqual(activity.activity.map(({ kind }) => kind), ['witness_prepare', 'witness_commit']);
     assert.deepEqual(
-      (await (await fetch(`${baseUrl}/activity?since_id=1`)).json()).activity.map(({ id }) => id),
-      [2]
+      (await (await fetch(`${baseUrl}/activity?since_id=${activityIds[0]}`)).json()).activity.map(({ id }) => id),
+      [activityIds[1]]
     );
     assert.equal((await fetch(`${baseUrl}/activity?since_id=nope`)).status, 400);
 
@@ -347,4 +348,31 @@ test('ingests signed Layer 1 and Layer 2 events into the ledger and dashboard fe
   await reloaded.initialize();
   assert.equal(reloaded.recentLayerEvents().length, 2);
   await rm(directory, { recursive: true, force: true });
+});
+
+test('records heartbeats and challenge entries from bank reconciliation', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-heartbeat-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const event = {
+    event_id: 'c80ba038-26ef-4d2f-84a8-e504a67ec7e6',
+    transaction_id: 21,
+    type: 'deposit',
+    amount_minor: 50000,
+    occurred_at: '2026-10-14T10:00:00.000Z'
+  };
+  await store.prepare(event);
+  await store.transition(event.event_id, 'commit');
+  const bankReturns = (transactions) => async () => ({ ok: true, json: async () => ({ transactions }) });
+  const matching = [{ transaction_id: 21, type: 'deposit', amount_minor: '50000', event_id: event.event_id }];
+
+  await reconcileBankTransactions(store, bankReturns(matching));
+  assert.ok(store.recentActivity().some((item) => item.kind === 'heartbeat'));
+
+  await reconcileBankTransactions(store, bankReturns([{ ...matching[0], amount_minor: '10000' }]));
+  assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_mismatch' && item.detail.includes('transaction #21')));
+
+  await reconcileBankTransactions(store, bankReturns(matching));
+  assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_ok'));
+  assert.equal(store.reportedMismatches.size, 0);
 });

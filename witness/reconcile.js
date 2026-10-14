@@ -106,10 +106,29 @@ export const reconcileBankTransactions = async (store, fetchImpl = fetch) => {
     checked_transactions: witnessed.length,
     mismatches
   });
+
+  // Each pass that reaches the bank is a heartbeat; a bank outage records nothing, so the
+  // auditor's heartbeat line goes flat. New mismatches and recoveries are challenge entries.
+  store.recordActivity('heartbeat', `bank reconciled: ${witnessed.length} records, ${mismatches.length} mismatches`);
+  const current = new Set();
+  for (const mismatch of mismatches) {
+    const key = `${mismatch.transaction_id}:${mismatch.issue}`;
+    current.add(key);
+    if (!store.reportedMismatches.has(key)) {
+      store.reportedMismatches.add(key);
+      store.recordActivity('challenge_mismatch', `transaction #${mismatch.transaction_id}: ${mismatch.issue.replaceAll('_', ' ')}`);
+    }
+  }
+  for (const key of [...store.reportedMismatches]) {
+    if (!current.has(key)) {
+      store.reportedMismatches.delete(key);
+      store.recordActivity('challenge_ok', `transaction #${key.split(':')[0]} matches the bank again`);
+    }
+  }
   return store.status().bank_reconciliation;
 };
 
-export const startBankReconciliation = (store, intervalMs = 30_000) => {
+export const startBankReconciliation = (store, intervalMs = 10_000) => {
   let running = false;
   const run = async () => {
     if (running || store.integrityError) return;
