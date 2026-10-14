@@ -23,6 +23,9 @@ export class WitnessStore {
     this.lastContactAt = null;         // ms; any signed request from ct105 counts as contact
     this.holderApprovals = new Set();  // key holders who approved the current quarantine (indexes)
     this.challengedEventIds = new Set(); // committed records already shown as a challenge on the graph
+    // Per witnessed transaction: when it last matched the bank, and when it first stopped matching.
+    // In memory, so after a restart the window starts again from the first pass.
+    this.recordHealth = new Map();
     this.challengeBaselineSet = false;
     this.lastRandomChallengeAt = 0;
     this.restoreRequest = null;        // one pending website restore, picked up by ct105

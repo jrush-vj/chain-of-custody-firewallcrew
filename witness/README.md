@@ -177,6 +177,13 @@ Heartbeats and Layer 3 also come from ct105's monitor, using the same signed req
   minute). ct105 polls for it with a signed request, runs `restore-normal.sh`, and acknowledges; a
   successful restore resolves the earlier alerts, including Layer 3, and the timeline keeps the history.
 
+When the reconcile pass finds a tampered record, `/mismatches` also carries evidence for the Layer 2
+panel: `previous_healthy`, the nearest earlier witnessed record that matched the bank in the same pass
+(proven healthy now, not assumed; `null` if there is none), and the tamper window, `last_matched_time`
+and `first_seen_time`, with at most one reconcile interval (10 s) of uncertainty. The window is held
+in memory, so after a witness restart it starts again from the first pass. The witness keeps only
+the type, amount, event id and transaction id of each record, so only those fields can be pinpointed.
+
 To update the Oracle witness from the repository's `main` branch, first check
 that the source checkout is clean. Do not discard local changes. Then run on
 Oracle:

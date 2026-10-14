@@ -222,7 +222,23 @@ const auditorMismatches = (store) => {
       fields: changedFields,
       witness_copy: witnessCopy,
       server_copy: serverCopy,
-      issue: mismatch.issue
+      issue: mismatch.issue,
+      // The nearest earlier record that matched the bank in the same pass (null if there is none).
+      previous_healthy: mismatch.previous_healthy
+        ? {
+            seq: mismatch.previous_healthy.transaction_id,
+            copy: {
+              txn_id: mismatch.previous_healthy.transaction_id,
+              type: mismatch.previous_healthy.type,
+              amount_minor: mismatch.previous_healthy.amount_minor,
+              event_id: mismatch.previous_healthy.event_id
+            },
+            verified_time: toEpochSeconds(mismatch.previous_healthy.verified_at)
+          }
+        : null,
+      // The tamper window: last time this record matched the bank, and the first time it did not.
+      last_matched_time: toEpochSeconds(mismatch.matched_before),
+      first_seen_time: toEpochSeconds(mismatch.first_seen_at)
     };
   });
 };

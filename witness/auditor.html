@@ -64,6 +64,12 @@ pre.diff .add{color:var(--green)}pre.diff .del{color:var(--red)}
 .cmp .h{font:600 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--panel2)}
 .cmp .f{color:var(--muted)}
 .cmp .bad{color:var(--red);font-weight:700;background:var(--red-bg)}
+.cmp.four{grid-template-columns:130px repeat(3,minmax(0,1fr))}
+.cmp.four>div{font-size:16px}
+.cmp .prev{color:var(--muted)}
+.cmp mark{background:#8a2020;color:#fff;border-radius:3px;padding:0 1px}
+.delta{font-size:13px;opacity:.9}
+.what{margin:10px 0 0;padding:10px 14px;background:var(--red-bg);border:1px solid #5a2024;border-radius:8px;color:#ffd7d7;font-size:17px}
 .hash{margin-top:8px;color:var(--muted);font:12px var(--mono);display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1fr);gap:0 14px;padding:0 14px;overflow-wrap:anywhere}
 .more{margin-top:18px}
 .more li{font-family:var(--mono);margin:4px 0}
@@ -116,7 +122,7 @@ const L2_KINDS = new Set(["sequence_gap", "chain_break", "bad_signature", "unkno
   "entries_reordered", "entry_replayed", "late_entry", "challenge_mismatch", "bad_challenge_signature", "record_mismatch",
   "non_monotonic_timestamp", "silence", "missed_challenge", "bad_heartbeat", "replayed_heartbeat", "balance_misreported", "db_edited_without_log"]);
 // The fields the witness records for every banking transaction. The amount is kept in minor units.
-const NAMES = { txn_id: "transaction", type: "type", amount_minor: "amount", event_id: "event id" };
+const NAMES = { txn_id: "txn id", type: "type", amount_minor: "amount", event_id: "event id" };
 const SHOWN = ["txn_id", "type", "amount_minor", "event_id"];
 // The reconciliation names the changed field "amount"; the copies carry it as amount_minor.
 const fieldKey = (k) => (k === "amount" ? "amount_minor" : k);
@@ -183,6 +189,34 @@ function screen1() {
   ${diffEv ? `<p class="sub" style="margin:16px 0 0">Changes, original → now</p>${diff}` : ""}`;
 }
 
+// Highlights the characters of b that differ from a, position by position. When most of the value
+// differs, per-character marks are only noise, so the whole cell is left to its red background.
+const markDiff = (a, b) => {
+  const left = String(a ?? ""), right = String(b ?? "");
+  let out = "", changedChars = 0;
+  for (let i = 0; i < right.length; i++) {
+    if (right[i] !== left[i]) changedChars++;
+    out += right[i] === left[i] ? esc(right[i]) : `<mark>${esc(right[i])}</mark>`;
+  }
+  return changedChars > right.length / 2 ? esc(right) : out;
+};
+// Where two strings differ, as 1-based character positions: "33–36" or "5, 9–10".
+const diffRanges = (a, b) => {
+  const left = String(a ?? ""), right = String(b ?? ""), bad = [];
+  for (let i = 0; i < Math.max(left.length, right.length); i++) if (left[i] !== right[i]) bad.push(i + 1);
+  const parts = [];
+  for (let i = 0; i < bad.length;) {
+    let j = i;
+    while (j + 1 < bad.length && bad[j + 1] === bad[j] + 1) j++;
+    parts.push(bad[i] === bad[j] ? `${bad[i]}` : `${bad[i]}–${bad[j]}`);
+    i = j + 1;
+  }
+  return parts.join(", ") || "none";
+};
+// "+190.01" style difference for the amount, which is kept in minor units.
+const deltaText = (k, a, b) => (k === "amount_minor" && Number.isInteger(a) && Number.isInteger(b)
+  ? ` <span class="delta">(${b - a >= 0 ? "+" : "−"}${(Math.abs(b - a) / 100).toFixed(2)})</span>` : "");
+
 function screen2() {
   const others = alerts.filter((a) => L2_KINDS.has(a.kind) && a.kind !== "record_mismatch" && !a.resolved);
   const otherList = others.length ? `<div class="more"><h3>Other Layer 2 alerts</h3><ul class="alist">${others.map((a) => `<li><span class="tt">${esc(a.tamper_type || a.kind)}</span> ${esc(a.detail)} <span class="empty">${clock(a.time)}</span></li>`).join("")}</ul></div>` : "";
@@ -190,13 +224,28 @@ function screen2() {
     return `<h2>Layer 2 · Heartbeat &amp; checksum</h2><p class="sub">${others.length ? "Tampering detected" : "Every record checked so far matches the sealed copy"}</p>${otherList}`;
   }
   const m = mism[0], w = m.witness_copy || {}, f = m.server_copy || {}, changed = new Set(m.fields.map(fieldKey));
-  const rows = m.server_copy === null
-    ? `<div class="f">record</div><div>${esc(w.txn_id)} …</div><div class="bad">missing on server</div>`
-    : SHOWN.map((k) => `<div class="f">${NAMES[k] || k}</div><div>${esc(money(k, w[k]))}</div><div class="${changed.has(k) ? "bad" : ""}">${esc(money(k, f[k]))}${changed.has(k) ? " ←" : ""}</div>`).join("");
+  const ph = m.previous_healthy;
+  const cell = (k) => {
+    if (m.server_copy === null) return `<div class="bad">missing</div>`;
+    const bad = changed.has(k);
+    const shown = bad && typeof f[k] === "string" ? markDiff(w[k], f[k]) : esc(money(k, f[k]));
+    return `<div class="${bad ? "bad" : ""}">${shown}${bad ? deltaText(k, w[k], f[k]) + " ←" : ""}</div>`;
+  };
+  const rows = SHOWN.map((k) => `<div class="f">${NAMES[k] || k}</div><div class="prev">${ph ? esc(money(k, ph.copy[k])) : "—"}</div><div>${esc(money(k, w[k]))}</div>${cell(k)}`).join("");
+  const what = m.server_copy === null
+    ? [`the bank no longer has record #${m.seq}`]
+    : SHOWN.filter((k) => changed.has(k)).map((k) => k === "event_id"
+        ? `<b>${NAMES[k]}</b>: characters ${diffRanges(w[k], f[k])} differ`
+        : `<b>${NAMES[k]}</b> ${esc(money(k, w[k]))} → ${esc(money(k, f[k]))}${deltaText(k, w[k], f[k])}`);
+  const window = m.last_matched_time
+    ? `Matched the bank at <b>${clock(m.last_matched_time)}</b>, first differed at <b>${clock(m.first_seen_time)}</b> (a ${Math.max(0, Math.round(m.first_seen_time - m.last_matched_time))} s window).`
+    : `First seen at <b>${clock(m.first_seen_time || m.caught_time)}</b>. No earlier match is on record since the witness started watching.`;
   const rest = mism.slice(1);
   return `<div class="rec-head"><h2>Record #${m.seq}</h2><span class="t">Caught by ${esc(m.caught_by.replace(/ \(c-[0-9a-f]+\)/, ""))} at ${clock(m.caught_time)}</span></div>
-  <div class="cmp"><div class="h">Field</div><div class="h">Expected (witness copy)</div><div class="h">Found on server</div>${rows}</div>
-  <div class="hash"><span>hash</span><span>${esc((m.witness_hash || "").slice(0, 12))}…</span><span>${m.server_hash ? esc(m.server_hash.slice(0, 12)) + "…" : "—"}</span></div>
+  <p class="sub" style="margin:6px 0 0">${window}</p>
+  <p class="what"><b>What changed:</b> ${what.join(" &nbsp;·&nbsp; ")}</p>
+  <div class="cmp four"><div class="h">Field</div><div class="h">${ph ? `Last healthy · #${ph.seq}` : "Last healthy"}</div><div class="h">Witness copy · #${m.seq}</div><div class="h">Bank now · #${m.seq}</div>${rows}</div>
+  <p class="sub" style="margin:10px 0 0">${ph ? `Record #${ph.seq} is the nearest earlier record that matched the bank (verified ${clock(ph.verified_time)}).` : "No earlier record matched the bank in this pass, so there is no healthy record to compare with."}</p>
   ${rest.length ? `<div class="more"><h3>Also tampered (found in the sweep)</h3><ul>${rest.map((x) => `<li>#${x.seq} · ${esc(x.fields.length ? x.fields.map((k) => NAMES[fieldKey(k)] || k).join(", ") : "record")}: ${x.server_copy ? x.fields.map((k) => { const key = fieldKey(k); return esc(money(key, x.witness_copy[key])) + " → " + esc(money(key, x.server_copy[key])); }).join(", ") : "missing on server"}</li>`).join("")}</ul></div>` : ""}
   ${otherList}`;
 }

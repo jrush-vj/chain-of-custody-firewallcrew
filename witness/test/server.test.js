@@ -645,3 +645,60 @@ test('the verified-record line has a time to show', async () => {
     await cleanup();
   }
 });
+
+test('a tamper is reported with the last healthy record and the window in which it happened', async () => {
+  const { store, witnessEvent, bank, matching, cleanup } = await challengeFixture('window');
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const one = await witnessEvent('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 1, 10000);
+    const two = await witnessEvent('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 2, 20000);
+    const three = await witnessEvent('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 3, 30000);
+    const pass = (rows) => reconcileBankTransactions(store, bank(rows));
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    await pass([matching(one), matching(two), matching(three)]);
+    assert.equal(store.status().bank_reconciliation.mismatches.length, 0);
+    const beforeTamper = store.recordHealth.get(2).lastMatchedAt;
+    assert.ok(beforeTamper > 0, 'a clean pass records when each record matched');
+
+    await sleep(15);
+    // Record 2 has its amount changed; record 3 disappears from the bank.
+    await pass([matching(one), { ...matching(two), amount_minor: '999' }]);
+    const found = (await (await fetch(`${baseUrl}/mismatches`)).json()).mismatches;
+    const second = found.find((item) => item.seq === 2);
+    const third = found.find((item) => item.seq === 3);
+
+    assert.deepEqual(second.fields, ['amount']);
+    assert.equal(second.previous_healthy.seq, 1, 'the nearest earlier record that matched');
+    assert.deepEqual(second.previous_healthy.copy, { txn_id: 1, type: 'deposit', amount_minor: 10000, event_id: one.event_id });
+    assert.equal(second.witness_copy.amount_minor, 20000);
+    assert.equal(second.server_copy.amount_minor, 999);
+    assert.ok(Math.abs(second.last_matched_time - beforeTamper / 1000) < 0.001, 'it matched at the earlier pass');
+    assert.ok(second.first_seen_time > second.last_matched_time, 'and first differed at a later pass');
+
+    assert.equal(third.issue, 'missing');
+    assert.equal(third.previous_healthy.seq, 1, 'record 2 is not healthy, so the reference skips it');
+
+    // Still tampered a pass later: the window start does not move.
+    const firstSeen = store.recordHealth.get(2).firstSeenAt;
+    await sleep(15);
+    await pass([matching(one), { ...matching(two), amount_minor: '999' }]);
+    assert.equal(store.recordHealth.get(2).firstSeenAt, firstSeen);
+
+    // The very first record has no earlier record to refer to.
+    await pass([{ ...matching(one), type: 'withdrawal' }, matching(two), matching(three)]);
+    const firstRecord = store.status().bank_reconciliation.mismatches.find((item) => item.transaction_id === 1);
+    assert.equal(firstRecord.previous_healthy, null);
+
+    // Put back: the record is healthy again and its window closes.
+    await pass([matching(one), matching(two), matching(three)]);
+    assert.equal(store.status().bank_reconciliation.mismatches.length, 0);
+    assert.equal(store.recordHealth.get(2).firstSeenAt, null);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await cleanup();
+  }
+});

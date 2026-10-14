@@ -69,36 +69,72 @@ export const reconcileBankTransactions = async (store, fetchImpl = fetch) => {
   }
 
   const mismatches = [];
+  const healthy = []; // witnessed records that matched the bank in this pass, in ledger order
+  const passAt = Date.now();
+  const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
   for (const event of witnessed) {
     const actual = observed.get(event.transaction_id);
+    const differences = [];
+    if (actual) {
+      if (actual.type !== event.type) differences.push('type');
+      if (Number(actual.amount_minor) !== event.amount_minor) differences.push('amount');
+      if (actual.event_id !== event.event_id) differences.push('event_id');
+    }
+    const intact = Boolean(actual) && differences.length === 0;
+
+    // When this record last matched the bank, and when it first stopped matching: the tamper window.
+    const health = store.recordHealth.get(event.transaction_id) || { lastMatchedAt: null, firstSeenAt: null };
+    if (intact) {
+      health.lastMatchedAt = passAt;
+      health.firstSeenAt = null;
+    } else if (health.firstSeenAt === null) {
+      health.firstSeenAt = passAt;
+    }
+    store.recordHealth.set(event.transaction_id, health);
+    if (intact) {
+      healthy.push(event);
+      continue;
+    }
+
+    // The nearest earlier record that matched the bank in this same pass. It is proven healthy now,
+    // not assumed to be.
+    const reference = healthy.at(-1);
+    const evidence = {
+      previous_healthy: reference
+        ? {
+            transaction_id: reference.transaction_id,
+            type: reference.type,
+            amount_minor: reference.amount_minor,
+            event_id: reference.event_id,
+            verified_at: iso(passAt)
+          }
+        : null,
+      matched_before: iso(health.lastMatchedAt),
+      first_seen_at: iso(health.firstSeenAt)
+    };
     if (!actual) {
       mismatches.push({
         transaction_id: event.transaction_id,
         issue: 'missing',
         witnessed_type: event.type,
         witnessed_amount_minor: event.amount_minor,
-        witnessed_event_id: event.event_id
+        witnessed_event_id: event.event_id,
+        ...evidence
       });
       continue;
     }
-
-    const differences = [];
-    if (actual.type !== event.type) differences.push('type');
-    if (Number(actual.amount_minor) !== event.amount_minor) differences.push('amount');
-    if (actual.event_id !== event.event_id) differences.push('event_id');
-    if (differences.length) {
-      mismatches.push({
-        transaction_id: event.transaction_id,
-        issue: `changed_${differences.join('_')}`,
-        fields: differences,
-        witnessed_type: event.type,
-        bank_type: actual.type,
-        witnessed_amount_minor: event.amount_minor,
-        bank_amount_minor: Number(actual.amount_minor),
-        witnessed_event_id: event.event_id,
-        bank_event_id: actual.event_id
-      });
-    }
+    mismatches.push({
+      transaction_id: event.transaction_id,
+      issue: `changed_${differences.join('_')}`,
+      fields: differences,
+      witnessed_type: event.type,
+      bank_type: actual.type,
+      witnessed_amount_minor: event.amount_minor,
+      bank_amount_minor: Number(actual.amount_minor),
+      witnessed_event_id: event.event_id,
+      bank_event_id: actual.event_id,
+      ...evidence
+    });
   }
 
   store.setReconciliation({
