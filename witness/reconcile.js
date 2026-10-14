@@ -76,7 +76,8 @@ export const reconcileBankTransactions = async (store, fetchImpl = fetch) => {
         transaction_id: event.transaction_id,
         issue: 'missing',
         witnessed_type: event.type,
-        witnessed_amount_minor: event.amount_minor
+        witnessed_amount_minor: event.amount_minor,
+        witnessed_event_id: event.event_id
       });
       continue;
     }
@@ -89,10 +90,13 @@ export const reconcileBankTransactions = async (store, fetchImpl = fetch) => {
       mismatches.push({
         transaction_id: event.transaction_id,
         issue: `changed_${differences.join('_')}`,
+        fields: differences,
         witnessed_type: event.type,
         bank_type: actual.type,
         witnessed_amount_minor: event.amount_minor,
-        bank_amount_minor: Number(actual.amount_minor)
+        bank_amount_minor: Number(actual.amount_minor),
+        witnessed_event_id: event.event_id,
+        bank_event_id: actual.event_id
       });
     }
   }

@@ -12,8 +12,10 @@ export class WitnessStore {
     this.filePath = filePath;
     this.records = [];
     this.events = new Map();
+    this.layerEvents = [];
     this.queue = Promise.resolve();
     this.integrityError = null;
+    this.lastSuccessfulReconciliationAt = null;
     this.reconciliation = {
       state: 'checking',
       checked_at: null,
@@ -57,7 +59,7 @@ export class WitnessStore {
         };
         const expectedHash = recordHash(expected);
         if (
-          !['prepare', 'commit', 'abort'].includes(record.action) ||
+          !['prepare', 'commit', 'abort', 'layer_event'].includes(record.action) ||
           record.seq !== expected.seq ||
           record.previous_hash !== expected.previous_hash ||
           record.hash !== expectedHash
@@ -71,6 +73,7 @@ export class WitnessStore {
     } catch (error) {
       this.records = [];
       this.events.clear();
+      this.layerEvents = [];
       this.integrityError = error.message;
       throw error;
     }
@@ -85,6 +88,10 @@ export class WitnessStore {
   }
 
   applyRecord(record) {
+    if (record.action === 'layer_event') {
+      this.layerEvents.push({ id: record.seq, ...record.payload, recorded_at: record.recorded_at });
+      return;
+    }
     const { event_id: eventId } = record.payload;
     if (record.action === 'prepare') {
       this.events.set(eventId, {
@@ -135,6 +142,17 @@ export class WitnessStore {
     this.applyRecord(entry);
     this.records.push(entry);
     return entry;
+  }
+
+  recordLayerEvent(payload) {
+    return this.enqueue(() => this.appendRecord('layer_event', payload));
+  }
+
+  recentLayerEvents(limit = 200) {
+    if (this.integrityError) {
+      return [];
+    }
+    return this.layerEvents.slice(-limit);
   }
 
   async prepare(event) {
@@ -193,10 +211,24 @@ export class WitnessStore {
       .map(([eventId, item]) => ({ ...item.event, event_id: eventId }));
   }
 
+  latestCommittedEvent() {
+    if (this.integrityError) {
+      return null;
+    }
+    const latest = [...this.events.entries()]
+      .reverse()
+      .find(([, item]) => item.state === 'committed');
+    return latest ? { ...latest[1].event, event_id: latest[0], state: latest[1].state } : null;
+  }
+
   setReconciliation(result) {
+    const checkedAt = new Date().toISOString();
+    if (result.checked_transactions > 0) {
+      this.lastSuccessfulReconciliationAt = checkedAt;
+    }
     this.reconciliation = {
       ...result,
-      checked_at: new Date().toISOString()
+      checked_at: checkedAt
     };
   }
 
@@ -237,5 +269,34 @@ export class WitnessStore {
       }))
       .sort((left, right) => right.prepare_seq - left.prepare_seq)
       .slice(0, limit);
+  }
+
+  recentActivity(sinceId = 0, limit = 200) {
+    if (this.integrityError) {
+      return [];
+    }
+    return this.records
+      .filter((record) => record.seq > sinceId)
+      .slice(-limit)
+      .map((record) => {
+        if (record.action === 'layer_event') {
+          return {
+            id: record.seq,
+            time: Date.parse(record.recorded_at) / 1000,
+            kind: `layer${record.payload.layer}_${record.payload.trigger}`,
+            detail: record.payload.summary
+          };
+        }
+        const eventId = record.payload.event_id;
+        const event = this.events.get(eventId)?.event;
+        return {
+          id: record.seq,
+          time: Date.parse(record.recorded_at) / 1000,
+          kind: `witness_${record.action}`,
+          detail: event
+            ? `Transaction ${event.transaction_id} ${record.action} (${event.type}, ${event.amount_minor} minor units)`
+            : `Transaction event ${eventId} ${record.action}`
+        };
+      });
   }
 }

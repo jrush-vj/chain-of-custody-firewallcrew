@@ -13,6 +13,13 @@ const hmacSecret = process.env.WITNESS_HMAC_SECRET || '';
 const dataPath = process.env.WITNESS_DATA_PATH || '/var/lib/banking-witness/ledger.jsonl';
 const maxBodyBytes = 16 * 1024;
 const html = readFileSync(new URL('./auditor.html', import.meta.url), 'utf8');
+// Set on ct105-ai only after the Layer 1 command tripwire is installed there; otherwise the card reads IDLE.
+const layer1Enabled = process.env.WITNESS_LAYER1_ENABLED === '1';
+// Same Layer 2 alert kinds the Cybersec auditor view groups under the Layer 2 card.
+const LAYER2_KINDS = new Set(['sequence_gap', 'chain_break', 'bad_signature', 'unknown_key_id', 'entry_edited',
+  'entry_deleted', 'entries_reordered', 'entry_replayed', 'late_entry', 'challenge_mismatch',
+  'bad_challenge_signature', 'record_mismatch', 'non_monotonic_timestamp', 'silence', 'missed_challenge',
+  'bad_heartbeat', 'replayed_heartbeat', 'balance_misreported', 'db_edited_without_log']);
 
 const readBody = async (request) => {
   const chunks = [];
@@ -36,6 +43,189 @@ const sendJson = (response, statusCode, payload) => {
     'x-content-type-options': 'nosniff'
   });
   response.end(JSON.stringify(payload));
+};
+
+const toEpochSeconds = (value) => (value ? Date.parse(value) / 1000 : null);
+
+const auditorStatus = (store) => {
+  const status = store.status();
+  const reconciliation = status.bank_reconciliation;
+  const hasVerifiedRecords = reconciliation.checked_transactions > 0;
+  const successfulCheck = reconciliation.state === 'unavailable'
+    ? store.lastSuccessfulReconciliationAt
+    : reconciliation.checked_at;
+  const checkedAt = hasVerifiedRecords ? toEpochSeconds(successfulCheck) : null;
+  const connection =
+    reconciliation.state === 'mismatch' || (reconciliation.state === 'ok' && hasVerifiedRecords)
+      ? 'connected'
+      : reconciliation.state === 'unavailable'
+        ? 'lost'
+        : 'waiting';
+  const latest = store.latestCommittedEvent();
+  return {
+    integration_mode: 'banking-witness',
+    platform_id: 'banking-system',
+    connection,
+    heartbeat_age: store.lastSuccessfulReconciliationAt
+      ? Math.max(0, Date.now() / 1000 - toEpochSeconds(store.lastSuccessfulReconciliationAt))
+      : null,
+    records_verified: reconciliation.checked_transactions,
+    last_verified: hasVerifiedRecords && latest
+      ? { seq: latest.transaction_id, time: latest.updated_at }
+      : null,
+    last_sweep: checkedAt,
+    server_time: Date.now() / 1000,
+    checks: {
+      A: status.healthy ? 'green' : 'red',
+      B: reconciliation.state === 'ok'
+        ? hasVerifiedRecords ? 'green' : 'unknown'
+        : reconciliation.state === 'mismatch' ? 'red' : 'unknown',
+      C: 'unknown'
+    },
+    layers: { 1: layer1Enabled ? 'on' : 'off', 2: 'on', 3: 'off' },
+    state: !status.healthy || reconciliation.state === 'mismatch'
+      ? 'alert'
+      : reconciliation.state === 'ok' && hasVerifiedRecords ? 'normal' : 'unknown',
+    // Layer 3 (quarantine) is not deployed on the banking host; the auditor view still needs this shape.
+    quarantine: { active: false, since: null, confirmed: false, id: null, unverified: null, after: 45, needed: 2, holders: [], unlock_issued: false },
+    bank_reconciliation: {
+      state: reconciliation.state,
+      checked_at: hasVerifiedRecords ? successfulCheck : null,
+      last_successful_check: store.lastSuccessfulReconciliationAt,
+      checked_transactions: reconciliation.checked_transactions,
+      mismatch_count: reconciliation.mismatches.length
+    }
+  };
+};
+
+const auditorAlerts = (store) => {
+  const status = store.status();
+  const checkedAt = toEpochSeconds(
+    status.bank_reconciliation.state === 'unavailable'
+      ? store.lastSuccessfulReconciliationAt
+      : status.bank_reconciliation.checked_at
+  ) || Date.now() / 1000;
+  const alerts = status.bank_reconciliation.mismatches.map((mismatch) => ({
+    kind: 'record_mismatch',
+    ref: String(mismatch.transaction_id),
+    tamper_type: mismatch.issue,
+    detail: `Transaction ${mismatch.transaction_id}: ${mismatch.issue.replaceAll('_', ' ')}`,
+    time: checkedAt,
+    resolved: 0
+  }));
+  if (!status.healthy) {
+    alerts.unshift({
+      kind: 'chain_break',
+      ref: 'ledger',
+      tamper_type: 'entry_edited',
+      detail: 'Witness JSONL ledger integrity validation failed; writes are disabled.',
+      time: Date.now() / 1000,
+      resolved: 0
+    });
+  }
+  for (const record of store.recentLayerEvents()) {
+    if (record.state !== 'alert') {
+      continue;
+    }
+    alerts.push({
+      kind: record.layer === 1 ? 'layer1_tripwire' : record.kind,
+      ref: record.trigger,
+      tamper_type: record.trigger,
+      detail: record.summary,
+      time: toEpochSeconds(record.recorded_at),
+      resolved: 0
+    });
+  }
+  return alerts;
+};
+
+const auditorLayerEvents = (store) => store.recentLayerEvents().map((record) => ({
+  layer: record.layer,
+  trigger: record.trigger,
+  state: record.state,
+  time: toEpochSeconds(record.recorded_at),
+  detail: { ...record.detail, summary: record.summary }
+}));
+
+const auditorMismatches = (store) => {
+  const status = store.status();
+  const caughtAt = toEpochSeconds(
+    status.bank_reconciliation.state === 'unavailable'
+      ? store.lastSuccessfulReconciliationAt
+      : status.bank_reconciliation.checked_at
+  ) || Date.now() / 1000;
+  return status.bank_reconciliation.mismatches.map((mismatch) => {
+    const changedFields = mismatch.fields || [];
+    const witnessCopy = {
+      txn_id: mismatch.transaction_id,
+      type: mismatch.witnessed_type,
+      amount_minor: mismatch.witnessed_amount_minor,
+      event_id: mismatch.witnessed_event_id
+    };
+    const serverCopy = mismatch.issue === 'missing'
+      ? null
+      : {
+          txn_id: mismatch.transaction_id,
+          type: mismatch.bank_type,
+          amount_minor: mismatch.bank_amount_minor,
+          event_id: mismatch.bank_event_id
+        };
+    return {
+      source: 'bank_reconciliation',
+      seq: mismatch.transaction_id,
+      caught_time: caughtAt,
+      caught_by: 'bank transaction reconciliation',
+      fields: changedFields,
+      witness_copy: witnessCopy,
+      server_copy: serverCopy,
+      issue: mismatch.issue
+    };
+  });
+};
+
+const validateLayerEvent = (event) => {
+  const fields = ['layer', 'trigger', 'state', 'kind', 'summary', 'detail'];
+  const required = ['layer', 'trigger', 'state', 'summary'];
+  const detail = event?.detail ?? {};
+  const invalid = (message) => {
+    const error = new Error(message);
+    error.statusCode = 400;
+    throw error;
+  };
+  if (!event || typeof event !== 'object' || Array.isArray(event)) {
+    invalid('Layer event must be a JSON object');
+  }
+  if (Object.keys(event).some((field) => !fields.includes(field)) || required.some((field) => !Object.hasOwn(event, field))) {
+    invalid('Layer event has missing or unknown fields');
+  }
+  if (![1, 2].includes(event.layer)) {
+    invalid('layer must be 1 or 2');
+  }
+  if (typeof event.trigger !== 'string' || !/^[a-z0-9_:.-]{1,80}$/.test(event.trigger)) {
+    invalid('trigger must be a short lowercase identifier');
+  }
+  if (!['alert', 'normal'].includes(event.state)) {
+    invalid('state must be alert or normal');
+  }
+  if (event.layer === 2 && !LAYER2_KINDS.has(event.kind)) {
+    invalid('Layer 2 events need a known kind');
+  }
+  if (event.layer === 1 && event.kind !== undefined) {
+    invalid('Layer 1 events do not take a kind');
+  }
+  if (typeof event.summary !== 'string' || event.summary.length === 0 || event.summary.length > 200) {
+    invalid('summary must be 1 to 200 characters');
+  }
+  if (
+    typeof detail !== 'object' || Array.isArray(detail) || Object.keys(detail).length > 20 ||
+    Object.values(detail).some((value) => !(
+      (typeof value === 'string' && value.length <= 4000) ||
+      (typeof value === 'number' && Number.isFinite(value)) ||
+      typeof value === 'boolean'
+    ))
+  ) {
+    invalid('detail must be a flat object of up to 20 short values');
+  }
 };
 
 const validateEvent = (event) => {
@@ -106,6 +296,47 @@ export const createWitnessServer = (store) =>
       if (request.method === 'GET' && pathname === '/v1/events') {
         return sendJson(response, 200, store.recentEvents());
       }
+      if (request.method === 'GET' && pathname === '/status') {
+        return sendJson(response, 200, auditorStatus(store));
+      }
+      if (request.method === 'GET' && pathname === '/alerts') {
+        return sendJson(response, 200, { alerts: auditorAlerts(store) });
+      }
+      if (request.method === 'GET' && pathname === '/timeline') {
+        const transactionEvents = store.recentEvents().map((event) => ({
+          layer: 2,
+          trigger: `transaction:${event.state}`,
+          state: 'normal',
+          time: event.updated_at || event.occurred_at,
+          detail: {
+            transaction_id: event.transaction_id,
+            type: event.type,
+            amount_minor: event.amount_minor
+          }
+        }));
+        const events = [...transactionEvents, ...auditorLayerEvents(store)];
+        return sendJson(response, 200, { events });
+      }
+      if (request.method === 'GET' && pathname === '/mismatches') {
+        return sendJson(response, 200, { mismatches: auditorMismatches(store) });
+      }
+      if (request.method === 'GET' && pathname === '/activity') {
+        const rawSinceId = new URL(request.url, 'http://localhost').searchParams.get('since_id') || '0';
+        if (!/^\d+$/.test(rawSinceId) || !Number.isSafeInteger(Number(rawSinceId))) {
+          return sendJson(response, 400, { error: 'since_id must be a non-negative integer' });
+        }
+        return sendJson(response, 200, {
+          activity: store.recentActivity(Number(rawSinceId), 200)
+        });
+      }
+      if (request.method === 'POST' && pathname === '/quarantine/approve') {
+        await readBody(request);
+        return sendJson(response, 409, {
+          status: 'disabled',
+          dry_run: true,
+          reason: 'Layer 3 quarantine is not integrated; no system actions are available.'
+        });
+      }
       if (request.method === 'GET' && pathname === '/') {
         response.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
@@ -118,7 +349,7 @@ export const createWitnessServer = (store) =>
       }
       if (
         request.method !== 'POST' ||
-        !['/v1/prepare', '/v1/commit', '/v1/abort'].includes(pathname)
+        !['/v1/prepare', '/v1/commit', '/v1/abort', '/v1/layer-events'].includes(pathname)
       ) {
         return sendJson(response, 404, { error: 'Not found' });
       }
@@ -140,6 +371,18 @@ export const createWitnessServer = (store) =>
       }
 
       let result;
+      if (pathname === '/v1/layer-events') {
+        validateLayerEvent(payload);
+        const record = await store.recordLayerEvent({
+          layer: payload.layer,
+          trigger: payload.trigger,
+          state: payload.state,
+          ...(payload.layer === 2 && { kind: payload.kind }),
+          summary: payload.summary,
+          detail: payload.detail ?? {}
+        });
+        return sendJson(response, 200, { status: 'recorded', seq: record.seq });
+      }
       if (pathname === '/v1/prepare') {
         validateEvent(payload.event);
         const event = {

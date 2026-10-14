@@ -1,327 +1,404 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="dark">
-  <title>Chain of Custody · Witness</title>
-  <style>
-    :root {
-      color-scheme: dark;
-      --bg: #0a0e13;
-      --panel: #111821;
-      --panel-raised: #16202b;
-      --line: #223041;
-      --text: #e3eaf2;
-      --muted: #8394a8;
-      --green: #34d399;
-      --green-bg: #0f2c22;
-      --red: #ff5c5c;
-      --red-bg: #3a1416;
-      --amber: #fbbf24;
-      --blue: #6aa8ff;
-      --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
-      --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--sans); }
-    .app { min-height: 100vh; display: grid; gap: 12px; padding: 12px 16px;
-      grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: auto auto minmax(240px, 1fr) auto;
-      grid-template-areas: "top top" "main l1" "main l2" "feed l3"; }
-    .top { grid-area: top; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-    h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
-    h1 span { color: var(--muted); font-weight: 400; }
-    .conn, .pill { font: 700 12px var(--mono); letter-spacing: .05em; padding: 5px 10px;
-      border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
-    .conn.live, .pill.ok { background: var(--green-bg); color: var(--green); border-color: #1d5a42; }
-    .conn.lost, .pill.bad { background: var(--red-bg); color: var(--red); border-color: var(--red); }
-    .pill.warn { background: #302710; color: var(--amber); border-color: #65511d; }
-    .panel, .layer { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-    .main { grid-area: main; padding: 20px 22px; overflow: auto; }
-    .eyebrow { color: var(--muted); font: 600 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
-    h2 { margin: 3px 0; font-size: 27px; line-height: 1.2; }
-    h3 { margin: 0; font-size: 16px; }
-    .sub { margin: 0; color: var(--muted); }
-    .banner { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
-      background: var(--panel-raised); }
-    .banner.bad { background: var(--red-bg); border-color: #732a2c; }
-    .banner.warn { background: #302710; border-color: #65511d; }
-    .banner strong { display: block; font: 700 15px var(--mono); }
-    .banner p { margin: 4px 0 0; color: var(--muted); }
-    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
-    .stat { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-raised); }
-    .stat .k { color: var(--muted); font-size: 12px; }
-    .stat .v { margin-top: 4px; font: 700 22px var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-    .section { margin-top: 16px; }
-    .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-    .section-head small { color: var(--muted); font: 12px var(--mono); }
-    .reconciliation { display: grid; gap: 8px; }
-    .mismatch { padding: 10px 12px; border-left: 3px solid var(--red); background: var(--red-bg); overflow-wrap: anywhere; }
-    .mismatch strong { color: #ffd7d7; }
-    .layer { padding: 14px 16px; display: flex; flex-direction: column; gap: 5px; }
-    #l1 { grid-area: l1; } #l2 { grid-area: l2; } #l3 { grid-area: l3; }
-    .layer .lbl { color: var(--muted); font: 600 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
-    .layer .name { font-size: 17px; font-weight: 700; }
-    .layer .desc { color: var(--muted); font-size: 13px; }
-    .layer .state { margin-top: auto; font: 700 12px var(--mono); letter-spacing: .04em; color: var(--muted); }
-    .layer.passed { border-color: #1d5a42; } .layer.passed .state { color: var(--green); }
-    .layer.caught { border-color: var(--red); background: linear-gradient(180deg, var(--red-bg), var(--panel) 80%); }
-    .layer.caught .state { color: var(--red); }
-    .layer.checking { border-color: #65511d; } .layer.checking .state { color: var(--amber); }
-    .feed { grid-area: feed; padding: 14px 16px; min-width: 0; }
-    .event-strip { display: flex; align-items: end; gap: 4px; height: 64px; padding: 8px 0 0; overflow: hidden; }
-    .event-bar { flex: 1 0 5px; max-width: 18px; min-height: 4px; border-radius: 2px 2px 0 0; background: var(--green); }
-    .event-bar.prepared { background: var(--amber); } .event-bar.aborted { background: var(--red); }
-    .legend { margin-top: 5px; color: var(--muted); font: 11px var(--mono); }
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
-    th { color: var(--muted); font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
-    td.m { font-family: var(--mono); white-space: nowrap; }
-    .empty { color: var(--muted); font-style: italic; }
-    .hash { color: var(--muted); font: 11px var(--mono); overflow-wrap: anywhere; }
-    .note { margin-top: 14px; color: var(--muted); font-size: 12px; }
-    @media (max-width: 980px) {
-      .app { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto auto auto;
-        grid-template-areas: "top top" "main main" "l1 l2" "l3 l3" "feed feed"; }
-      .main { min-height: 540px; }
-      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (max-width: 620px) {
-      .app { grid-template-columns: 1fr; grid-template-areas: "top" "l1" "l2" "l3" "main" "feed"; padding: 10px; }
-      .top { align-items: flex-start; } h1 { font-size: 17px; }
-      .main { min-height: 0; padding: 16px; }
-      h2 { font-size: 23px; }
-      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Witness · Auditor</title>
+<style>
+/* Layout per MD_FILES/ui_design.md: main panel + three layer cards on the right, heartbeat monitor along the bottom. */
+:root{
+  --bg:#0a0e13;--panel:#111821;--panel2:#16202b;--line:#223041;--text:#e3eaf2;--muted:#8394a8;
+  --green:#34d399;--green-bg:#0f2c22;--red:#ff5c5c;--red-bg:#3a1416;--grey:#5b6878;--grey-bg:#1a222c;--amber:#fbbf24;--blue:#6aa8ff;
+  --mono:ui-monospace,"Cascadia Mono",Consolas,monospace;--sans:"Segoe UI",system-ui,-apple-system,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 var(--sans);overflow:hidden}
+.app{height:100%;display:grid;gap:12px;padding:12px 16px;
+  grid-template-columns:minmax(0,1fr) 320px;grid-template-rows:auto minmax(0,1fr) minmax(0,1fr) 25vh;
+  grid-template-areas:"top top" "main l1" "main l2" "mon l3"}
+.top{grid-area:top;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.top h1{margin:0;font-size:20px;letter-spacing:.02em}
+.top h1 span{color:var(--muted);font-weight:400}
+.conn{font:700 15px var(--mono);padding:6px 14px;border-radius:8px;background:var(--grey-bg);color:var(--muted)}
+.conn.connected{background:var(--green-bg);color:var(--green)}
+.conn.lost,.conn.quarantined{background:var(--red-bg);color:var(--red)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;min-width:0;min-height:0}
+.main{grid-area:main;padding:22px 26px;overflow:auto}
+.card{padding:16px 18px;cursor:pointer;display:flex;flex-direction:column;gap:6px;border-width:2px;text-align:left;font:inherit;color:inherit}
+.card:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.card .lbl{font:600 12px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--muted)}
+.card .nm{font-size:20px;font-weight:700}
+.card .st{font:700 15px var(--mono);margin-top:auto}
+.card .when{color:var(--muted);font-size:13px;font-family:var(--mono)}
+.card.idle{border-color:var(--line)}.card.idle .st{color:var(--grey)}
+.card.passed{border-color:#1d5a42}.card.passed .st{color:var(--green)}
+.card.caught{border-color:var(--red);background:linear-gradient(180deg,var(--red-bg),var(--panel) 70%)}.card.caught .st{color:var(--red)}
+.card.active{box-shadow:inset 0 0 0 1px var(--text)}
+#c1{grid-area:l1}#c2{grid-area:l2}#c3{grid-area:l3}
+.mon{grid-area:mon;padding:10px 14px;display:flex;flex-direction:column}
+.mon .hd{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font:600 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.mon .legend{letter-spacing:0;text-transform:none;font-weight:400}
+.mon .legend b{font-weight:700}
+.mon canvas{flex:1;width:100%;min-height:0;display:block}
+h2{margin:0 0 4px;font-size:30px;letter-spacing:-.01em}
+.sub{color:var(--muted);margin:0 0 20px;font-size:17px}
+.big{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:10px}
+.stat{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:16px}
+.stat .k{color:var(--muted);font-size:14px}
+.stat .v{font:700 30px var(--mono);margin-top:4px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.stat .v.ok{color:var(--green)}.stat .v.bad{color:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:16px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font:600 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+td.m{font-family:var(--mono);white-space:nowrap}
+tr.hit td{background:var(--red-bg);color:#ffd7d7}
+tr.hit td:first-child{box-shadow:inset 4px 0 0 var(--red)}
+.rule{margin-top:14px;padding:12px 14px;border-radius:8px;background:var(--red-bg);color:#ffd7d7;font-size:17px}
+pre.diff{margin:12px 0 0;padding:12px;background:#070a0e;border:1px solid var(--line);border-radius:8px;font:14px/1.5 var(--mono);overflow-x:auto}
+pre.diff .add{color:var(--green)}pre.diff .del{color:var(--red)}
+.rec-head{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;align-items:baseline}
+.rec-head .t{color:var(--muted);font-family:var(--mono)}
+.cmp{display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1fr);margin-top:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.cmp>div{padding:10px 14px;border-bottom:1px solid var(--line);font:18px var(--mono);overflow-wrap:anywhere}
+.cmp .h{font:600 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--panel2)}
+.cmp .f{color:var(--muted)}
+.cmp .bad{color:var(--red);font-weight:700;background:var(--red-bg)}
+.hash{margin-top:8px;color:var(--muted);font:12px var(--mono);display:grid;grid-template-columns:150px minmax(0,1fr) minmax(0,1fr);gap:0 14px;padding:0 14px;overflow-wrap:anywhere}
+.more{margin-top:18px}
+.more li{font-family:var(--mono);margin:4px 0}
+.alist li{margin:6px 0}
+.tt{font:700 13px var(--mono);padding:2px 9px;border-radius:999px;background:var(--red-bg);color:var(--red)}
+.quar{font-size:28px;font-weight:800;color:var(--red);margin:0 0 18px}
+.ev{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media (max-width:760px){.ev{grid-template-columns:1fr}}
+.holders td{font-size:17px;padding:5px 10px}.feed li{line-height:1.6}
+.pill{font:700 13px var(--mono);padding:3px 10px;border-radius:999px}
+.pill.pending{background:var(--grey-bg);color:var(--muted)}.pill.approved{background:var(--green-bg);color:var(--green)}
+button.ap{font:600 15px var(--sans);padding:7px 16px;border-radius:8px;border:1px solid var(--green);background:transparent;color:var(--green);cursor:pointer}
+button.ap:disabled{opacity:.35;cursor:default}
+.need{margin-top:10px;color:var(--muted);font-size:17px}
+.empty{color:var(--muted);font-style:italic}
+.topr{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.pv{display:flex;gap:4px;align-items:center;font:600 12px var(--mono);color:var(--muted)}
+.pv span{margin-right:4px;letter-spacing:.1em;text-transform:uppercase}
+.pv button{font:600 13px var(--sans);padding:5px 11px;border-radius:7px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer}
+.pv button[aria-pressed="true"]{background:var(--amber);border-color:var(--amber);color:#1a1300}
+.pvnote{position:fixed;left:50%;transform:translateX(-50%);bottom:8px;font:600 12px var(--mono);color:var(--amber);background:var(--panel2);border:1px dashed var(--amber);padding:3px 10px;border-radius:6px;z-index:5}
+.feed{list-style:none;padding:0;margin:0;font:16px/1.9 var(--mono)}.feed .m{color:var(--muted)}.okc{color:var(--green);font-weight:700}.badc{color:var(--red);font-weight:700}
+.card .ds{color:var(--muted);font-size:14px}
+.feed.cols{columns:2;column-gap:24px}
+@media (max-width:900px){body{overflow:auto}.app{height:auto;grid-template-columns:1fr;grid-template-rows:auto;grid-template-areas:"top" "l1" "l2" "l3" "main" "mon"}.main{min-height:60vh}.mon{height:220px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
 </head>
 <body>
-  <div class="app">
-    <header class="top">
-      <h1>Chain of Custody · Witness <span>auditor view</span></h1>
-      <span class="conn" id="connection" role="status">CONNECTING</span>
-    </header>
+<div class="app">
+  <div class="top"><h1>Chain of Custody · Witness <span>auditor view</span></h1>
+    <div class="topr"><div class="pv" id="pv" role="group" aria-label="Preview"><span>Preview</span><button data-pv="live" aria-pressed="true">Live</button><button data-pv="normal">Normal</button><button data-pv="l1">Layer 1</button><button data-pv="l2">Layer 2</button><button data-pv="l3">Layer 3</button></div><span class="conn" id="conn">CONNECTING</span></div></div>
+  <section class="panel main" id="main" aria-live="polite"></section>
+  <button class="panel card idle" id="c1" data-layer="1"><span class="lbl">Layer 1</span><span class="nm">Custom commands</span><span class="ds">Guarded commands need the team's profile-id</span><span class="when"></span><span class="st">IDLE</span></button>
+  <button class="panel card idle" id="c2" data-layer="2"><span class="lbl">Layer 2</span><span class="nm">Heartbeat &amp; checksum</span><span class="ds">Sealed records, random checks, truth check</span><span class="when"></span><span class="st">IDLE</span></button>
+  <button class="panel card idle" id="c3" data-layer="3"><span class="lbl">Layer 3</span><span class="nm">Quarantine</span><span class="ds">Network cut → server locks itself down</span><span class="when"></span><span class="st">IDLE</span></button>
+  <div class="pvnote" id="pvnote" hidden>PREVIEW · sample data, not live</div>
+  <section class="panel mon"><div class="hd"><span>Live heartbeat monitor</span>
+    <span class="legend"><b style="color:var(--blue)">▲</b> witness asks · <b style="color:var(--green)">▼</b> matches · <b style="color:var(--red)">▼</b> tampered · <b style="color:var(--amber)">?</b> no answer · <b style="color:var(--muted)">•</b> heartbeat</span></div>
+    <canvas id="mon" aria-label="Heartbeat and random check monitor"></canvas></section>
+</div>
 
-    <main class="panel main">
-      <div class="eyebrow">Oracle transaction witness</div>
-      <h2>Independent evidence monitor</h2>
-      <p class="sub">Hash-chained transaction evidence and bank-record reconciliation.</p>
-      <section class="banner" id="integrity">
-        <strong>Loading witness integrity…</strong>
-      </section>
-      <div class="stats" aria-label="Witness ledger summary">
-        <div class="stat"><div class="k">Ledger records</div><div class="v" id="record-count">—</div></div>
-        <div class="stat"><div class="k">Latest sequence</div><div class="v" id="latest-seq">—</div></div>
-        <div class="stat"><div class="k">Prepared events</div><div class="v" id="prepared-count">—</div></div>
-        <div class="stat"><div class="k">Latest record hash</div><div class="v hash" id="latest-hash">—</div></div>
-      </div>
-      <section class="section" aria-labelledby="reconciliation-title">
-        <div class="section-head">
-          <h3 id="reconciliation-title">Bank reconciliation</h3>
-          <span class="pill warn" id="reconciliation-state">CHECKING</span>
-        </div>
-        <div class="reconciliation" id="reconciliation" aria-live="polite">
-          <p class="empty">Waiting for the first bank check.</p>
-        </div>
-      </section>
-      <section class="section" aria-labelledby="events-title">
-        <div class="section-head">
-          <h3 id="events-title">Recent transaction evidence</h3>
-          <small id="updated-at">Waiting for data</small>
-        </div>
-        <div class="table-wrap" id="events" aria-live="polite">
-          <p class="empty">Loading witnessed events…</p>
-        </div>
-      </section>
-      <p class="note">Layer 1 command tripwire and Layer 3 quarantine are not connected to this banking witness.</p>
-    </main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+const isoClock = (s) => { const d = new Date(s); return isNaN(d) ? esc(s) : d.toLocaleTimeString([], { hour12: false }); };
+const L2_KINDS = new Set(["sequence_gap", "chain_break", "bad_signature", "unknown_key_id", "entry_edited", "entry_deleted",
+  "entries_reordered", "entry_replayed", "late_entry", "challenge_mismatch", "bad_challenge_signature", "record_mismatch",
+  "non_monotonic_timestamp", "silence", "missed_challenge", "bad_heartbeat", "replayed_heartbeat", "balance_misreported", "db_edited_without_log"]);
+const NAMES = { amount_paise: "amount", from_account: "from", to_account: "to", from_balance_paise: "from balance",
+  to_balance_paise: "to balance", txn_id: "txn id", timestamp: "time" };
+const SHOWN = ["txn_id", "timestamp", "from_account", "to_account", "amount_paise", "from_balance_paise", "to_balance_paise"];
+const money = (f, v) => (f.endsWith("paise") && Number.isInteger(v) ? (v / 100).toFixed(2) : v ?? "—");
 
-    <section class="layer" id="l1" aria-label="Layer 1 command tripwire not integrated">
-      <div class="lbl">Layer 1</div><div class="name">Command tripwire</div>
-      <div class="desc">Cybersec agent events are not connected to this service.</div>
-      <div class="state">NOT INTEGRATED</div>
-    </section>
-    <section class="layer checking" id="l2" aria-label="Layer 2 transaction witness status">
-      <div class="lbl">Layer 2</div><div class="name">Banking witness</div>
-      <div class="desc">Ledger integrity and transaction reconciliation.</div>
-      <div class="state" id="layer-two-state">CHECKING</div>
-    </section>
-    <section class="layer" id="l3" aria-label="Layer 3 quarantine not integrated">
-      <div class="lbl">Layer 3</div><div class="name">Quarantine</div>
-      <div class="desc">Cybersec quarantine controls are not connected to this service.</div>
-      <div class="state">NOT INTEGRATED</div>
-    </section>
+let S = null, alerts = [], events = [], mism = [], acts = [], lastAct = 0, offset = 0;
+let view = 0, pinned = false, prevCaught = { 1: 0, 2: 0, 3: 0 };
 
-    <section class="panel feed" aria-labelledby="monitor-title">
-      <div class="section-head">
-        <h3 id="monitor-title">Recent witness activity</h3>
-        <small>Latest 50 events · oldest to newest</small>
-      </div>
-      <div class="event-strip" id="event-strip" role="img" aria-label="No transaction activity yet"></div>
-      <div class="legend">COMMITTED · PREPARED · ABORTED</div>
-    </section>
+async function j(p) { const r = await fetch(p, { cache: "no-store" }); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+function layerState() {
+  const l1 = alerts.filter((a) => a.kind === "layer1_tripwire");
+  const l2 = alerts.filter((a) => L2_KINDS.has(a.kind) && !a.resolved);
+  const q = S && S.quarantine;
+  const on = (n) => S && S.layers[n] !== "off";
+  return {
+    1: { st: !on(1) ? "idle" : l1.length ? "caught" : "passed", n: l1.length, t: l1.length ? l1[l1.length - 1].time : null },
+    2: { st: !on(2) ? "idle" : l2.length ? "caught" : S && S.connection === "waiting" ? "idle" : "passed", n: l2.length, t: l2.length ? l2[l2.length - 1].time : null },
+    3: { st: !on(3) ? "idle" : q && q.active ? "caught" : "passed", n: q && q.active ? 1 : 0, t: q && q.since },
+  };
+}
+
+function renderCards(ls) {
+  for (const n of [1, 2, 3]) {
+    const c = $("c" + n), s = ls[n];
+    c.className = `panel card ${s.st}${view === n ? " active" : ""}`;
+    c.querySelector(".st").textContent = s.st === "caught" ? (n === 3 ? "QUARANTINED" : `CAUGHT · ${s.n}`) : s.st === "passed" ? "PASSED" : "IDLE";
+    c.querySelector(".when").textContent = s.st === "caught" && s.t ? "fired " + clock(s.t) : "";
+    if (s.n > prevCaught[n] && !pinned) view = n;  // auto-switch to the layer that just caught something
+    prevCaught[n] = s.n;
+  }
+}
+
+function screen0() {
+  const s = S, lv = s.last_verified;
+  return `<h2>${esc(s.platform_id || "Waiting for server")}</h2>
+  <p class="sub">${s.connection === "connected" ? "Connected · every record sealed, checked and verified" : s.connection === "lost" ? "No contact with the server" : "Waiting for the first heartbeat"}</p>
+  <div class="big">
+    <div class="stat"><div class="k">Status</div><div class="v ${s.connection === "connected" ? "ok" : "bad"}">${esc(s.connection.toUpperCase())}</div></div>
+    <div class="stat"><div class="k">Last verified record</div><div class="v">${lv ? "#" + lv.seq : "—"}</div><div class="k">${lv ? isoClock(lv.time) : ""}</div></div>
+    <div class="stat"><div class="k">Records verified</div><div class="v">${s.records_verified}</div></div>
+    <div class="stat"><div class="k">Last full check</div><div class="v">${s.last_sweep ? clock(s.last_sweep) : "—"}</div><div class="k">rolling sweep of every record</div></div>
   </div>
+  <h3 style="margin:26px 0 8px;color:var(--muted);font-size:14px;letter-spacing:.1em;text-transform:uppercase">Latest random checks</h3>
+  <ul class="feed">${acts.filter((a) => a.kind.startsWith("challenge_") && a.kind !== "challenge_issued").slice(-6).reverse()
+    .map((a) => `<li><span class="m">${clock(a.time)}</span> <span class="${a.kind === "challenge_ok" ? "okc" : "badc"}">${a.kind === "challenge_ok" ? "✓" : "✗"}</span> ${esc(a.detail.replace(/^c-[0-9a-f]+ /, ""))}</li>`).join("") || '<li class="empty">Waiting for the first check…</li>'}</ul>`;
+}
 
-  <script>
-    const $ = (id) => document.getElementById(id);
-    const money = (minor) => Number.isSafeInteger(minor) ? '$' + (minor / 100).toFixed(2) : '—';
-    const date = (value) => {
-      const parsed = new Date(value);
-      return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleString();
-    };
-    const node = (tag, value, className) => {
-      const element = document.createElement(tag);
-      if (className) element.className = className;
-      element.textContent = value;
-      return element;
-    };
-    const setLayerTwo = (state, text) => {
-      $('l2').className = 'layer ' + state;
-      $('layer-two-state').textContent = text;
-    };
-    function renderIntegrity(status) {
-      const banner = $('integrity');
-      banner.replaceChildren();
-      banner.className = 'banner ' + (status.healthy ? '' : 'bad');
-      banner.append(node('strong', status.healthy ? 'Ledger integrity verified' : 'LEDGER INTEGRITY FAILURE'));
-      if (!status.healthy) {
-        banner.append(node('p', status.integrity_error || 'Witness writes are disabled.'));
-      } else {
-        banner.append(node('p', 'The witness verified the append-only ledger at startup.'));
-      }
-      $('record-count').textContent = status.record_count;
-      $('latest-seq').textContent = status.latest_seq;
-      $('prepared-count').textContent = status.prepared_count;
-      $('latest-hash').textContent = status.latest_hash.slice(0, 12) + '…';
-      $('latest-hash').title = status.latest_hash;
-      $('latest-hash').setAttribute('aria-label', 'Latest record hash ' + status.latest_hash);
+function screen1() {
+  const rows = events.filter((e) => e.layer === 1);
+  if (!rows.length) return `<h2>Layer 1 · Custom commands</h2><p class="sub">No commands seen yet. The team uses <code>&lt;cmd&gt; --&lt;profile-id&gt;</code>; anything else trips.</p>`;
+  const last = [...rows].reverse().find((e) => e.state === "alert");
+  const diffEv = [...rows].reverse().find((e) => e.detail && e.detail.diff);
+  const body = rows.slice(-14).reverse().map((e) => {
+    const d = e.detail || {}, w = e.who || {};
+    return `<tr class="${e.state === "alert" ? "hit" : ""}"><td class="m">${isoClock(e.time)}</td><td>${esc(w.user || (w.uid ?? "—"))}</td><td class="m">${esc(w.src_ip || "local")}</td><td class="m">${esc(d.cmd || e.trigger)}</td><td>${esc(d.result || (e.state === "alert" ? "caught" : "logged"))}</td></tr>`;
+  }).join("");
+  const diff = diffEv ? `<pre class="diff">${esc(diffEv.detail.diff).split("\n").map((l) => l.startsWith("+") && !l.startsWith("+++") ? `<span class="add">${l}</span>` : l.startsWith("-") && !l.startsWith("---") ? `<span class="del">${l}</span>` : l).join("\n")}</pre>` : "";
+  return `<h2>Layer 1 · Custom commands</h2><p class="sub">Command log from the server</p>
+  <table><thead><tr><th>Time</th><th>User</th><th>Source IP</th><th>Command</th><th>Result</th></tr></thead><tbody>${body}</tbody></table>
+  ${last ? `<div class="rule">Rule broken: ${esc(last.detail.rule || "Command not in the allowed command set")}.</div>` : ""}
+  ${diffEv ? `<p class="sub" style="margin:16px 0 0">What the intruder tried to change (they edited a decoy; the real log is untouched):</p>${diff}` : ""}`;
+}
+
+function screen2() {
+  const others = alerts.filter((a) => L2_KINDS.has(a.kind) && a.kind !== "record_mismatch" && !a.resolved);
+  const otherList = others.length ? `<div class="more"><h3>Other Layer 2 alerts</h3><ul class="alist">${others.map((a) => `<li><span class="tt">${esc(a.tamper_type || a.kind)}</span> ${esc(a.detail)} <span class="empty">${clock(a.time)}</span></li>`).join("")}</ul></div>` : "";
+  if (!mism.length) {
+    return `<h2>Layer 2 · Heartbeat &amp; checksum</h2><p class="sub">${others.length ? "Tampering detected" : "Every record checked so far matches the sealed copy"}</p>${otherList}`;
+  }
+  const m = mism[0], w = m.witness_copy || {}, f = m.server_copy || {}, changed = new Set(m.fields);
+  const rows = m.server_copy === null
+    ? `<div class="f">record</div><div>${esc(w.txn_id)} …</div><div class="bad">missing on server</div>`
+    : SHOWN.map((k) => `<div class="f">${NAMES[k] || k}</div><div>${esc(money(k, w[k]))}</div><div class="${changed.has(k) ? "bad" : ""}">${esc(money(k, f[k]))}${changed.has(k) ? " ←" : ""}</div>`).join("");
+  const rest = mism.slice(1);
+  return `<div class="rec-head"><h2>Record #${m.seq}</h2><span class="t">Caught by ${esc(m.caught_by.replace(/ \(c-[0-9a-f]+\)/, ""))} at ${clock(m.caught_time)}</span></div>
+  <div class="cmp"><div class="h">Field</div><div class="h">Expected (witness copy)</div><div class="h">Found on server</div>${rows}</div>
+  <div class="hash"><span>hash</span><span>${esc((m.witness_hash || "").slice(0, 12))}…</span><span>${m.server_hash ? esc(m.server_hash.slice(0, 12)) + "…" : "—"}</span></div>
+  ${rest.length ? `<div class="more"><h3>Also tampered (found in the sweep)</h3><ul>${rest.map((x) => `<li>#${x.seq} · ${esc(x.fields.map((k) => NAMES[k] || k).join(", "))}: ${x.server_copy ? x.fields.map((k) => esc(money(k, x.witness_copy[k])) + " → " + esc(money(k, x.server_copy[k]))).join(", ") : "missing on server"}</li>`).join("")}</ul></div>` : ""}
+  ${otherList}`;
+}
+
+function screen3() {
+  const q = S.quarantine, last = events.filter((e) => e.layer === 3);
+  if (!q || !q.active) {
+    const rel = [...last].reverse().find((e) => e.trigger === "quarantine:released");
+    return `<h2>Layer 3 · Quarantine</h2><p class="sub">Not active. If the server loses contact with the witness for 45 s, it quarantines itself: evidence sealed locally, site down, every user logged out (root included), 2 of 3 key holders needed to unlock.</p>
+    ${rel ? `<p class="sub">Last quarantine <b>${esc(rel.detail.quarantine_id)}</b> released at ${isoClock(rel.time)} after key-holder approval.</p>` : ""}`;
+  }
+  const lv = S.last_verified, approved = q.holders.filter((h) => h.approved).length;
+  const holders = q.holders.map((h, i) =>
+    `<tr><td>${esc(h.name)}</td><td><span class="pill ${h.approved ? "approved" : "pending"}">${h.approved ? "Approved" : "Pending"}</span></td><td><button class="ap" data-holder="${i}" ${h.approved ? "disabled" : ""}>Approve</button></td></tr>`).join("");
+  const acts = last.filter((e) => e.detail && e.detail.quarantine_id === q.id && e.trigger === "quarantine:locked");
+  const actions = acts.length ? [...(acts[0].detail.site_down || []), ...(acts[0].detail.lockout || [])] : [];
+  const dry = acts.length && acts[0].detail.dry_run;
+  const status = q.unlock_issued ? "Unlock signed by the witness. Waiting for the server to apply it…"
+    : approved >= q.needed ? "Approvals complete. Unlock will be signed once the server reports in."
+    : `${q.needed} of ${q.holders.length} approvals needed to unlock.`;
+  return `<p class="quar">Banking server has quarantined itself. All users logged out.</p>
+  <p class="sub">${q.confirmed ? `Server confirmed quarantine <b>${esc(q.id)}</b>.` : "Reported by the witness: the server's policy locks it down after " + q.after + " s without contact."} No contact since ${clock(q.since)}. The witness did not do the lockdown; the network was cut.</p>
+  <div class="ev">
+    <div class="stat"><div class="k">Verified and stored on witness</div><div class="v ok">#1 – #${lv ? lv.seq : 0}</div><div class="k">${lv ? "up to " + isoClock(lv.time) : ""}</div></div>
+    <div class="stat"><div class="k">Unverified since cut</div><div class="v bad">${q.unverified == null ? "unknown" : q.unverified + " records"}</div><div class="k">${q.unverified == null ? "held on the server until the network is back" : "received after reconnect, being verified"}</div></div>
+  </div>
+  ${actions.length ? `<h3 style="margin-top:20px">What the server did${dry ? ' <span class="empty">(dry run: recorded, not executed)</span>' : ""}</h3><ul class="feed cols">${actions.map((r) => `<li><span class="okc">✓</span> ${esc(r.cmd)}</li>`).join("")}</ul>` : ""}
+  <h3 style="margin-top:20px">Key holders</h3>
+  <table class="holders"><tbody>${holders}</tbody></table>
+  <p class="need">${status}</p>`;
+}
+
+function renderMain() {
+  if (!S) return;
+  const html = view === 1 ? screen1() : view === 2 ? screen2() : view === 3 ? screen3() : screen0();
+  if ($("main").dataset.html !== html) { $("main").innerHTML = html; $("main").dataset.html = html; }
+}
+
+$("main").addEventListener("click", async (e) => {
+  const b = e.target.closest("button.ap");
+  if (!b) return;
+  b.disabled = true;
+  if (mode !== "live") { approvals.add(Number(b.dataset.holder)); buildPreview(mode); renderAll(); return; }
+  try { await fetch("/quarantine/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ holder: Number(b.dataset.holder) }) }); } catch (err) { b.disabled = false; }
+});
+for (const n of [1, 2, 3]) $("c" + n).addEventListener("click", () => { view = view === n ? 0 : n; pinned = view !== 0; renderAll(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" || e.key === "0") { view = 0; pinned = false; renderAll(); } });
+
+// Heartbeat monitor: 90 s scrolling window. Up spike = witness asks (labelled #N), down spike = answer.
+const WINDOW = 60;
+function label(detail) {
+  const m = /record #(\d+)/.exec(detail) || /sweep #(\d+)-#(\d+)/.exec(detail);
+  if (m && m[2]) return `#${m[1]}–${m[2]}`;
+  if (m) return "#" + m[1];
+  const st = /state (\S+)/.exec(detail);
+  return st ? st[1] : "#latest";
+}
+function drawMonitor() {
+  const cv = $("mon"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (!W || !H) return;
+  if (cv.width !== W * dpr || cv.height !== H * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const now = Date.now() / 1000 + offset, mid = H * 0.55, amp = Math.min(H * 0.38, 70), x = (t) => W - ((now - t) / WINDOW) * W;
+  const css = getComputedStyle(document.documentElement), col = (v) => css.getPropertyValue(v).trim();
+  g.strokeStyle = col("--line"); g.lineWidth = 1;
+  for (let s = 0; s <= WINDOW; s += 15) { const xx = x(now - s); g.beginPath(); g.moveTo(xx, 8); g.lineTo(xx, H - 4); g.stroke(); }
+  const recent = acts.filter((a) => a.time > now - WINDOW - 5);
+  const beats = recent.filter((a) => a.kind === "heartbeat");
+  const lastBeat = S && S.heartbeat_age != null ? S.server_time - S.heartbeat_age : null;
+  const dead = !lastBeat || now - lastBeat > 15;
+  // baseline: green while heartbeats arrive, flat red once they stop
+  g.lineWidth = 2; g.strokeStyle = dead ? col("--red") : col("--green"); g.setLineDash(dead ? [6, 6] : []);
+  g.beginPath(); g.moveTo(0, mid);
+  const spikes = recent.filter((a) => a.kind.startsWith("challenge_")).sort((a, b) => a.time - b.time);
+  const askX = {};
+  for (const a of spikes) {
+    const id = a.detail.split(" ")[0];
+    if (a.kind === "challenge_issued") { a.x = x(a.time); askX[id] = a.x; }
+    else a.x = Math.max(x(a.time), (askX[id] ?? -1e9) + 14);
+  }
+  for (const a of spikes) {
+    const xx = a.x; if (xx < 0) continue;
+    const up = a.kind === "challenge_issued";
+    g.lineTo(xx - 4, mid); g.lineTo(xx, up ? mid - amp : mid + amp * 0.8); g.lineTo(xx + 4, mid);
+  }
+  g.lineTo(W, mid); g.stroke(); g.setLineDash([]);
+  // colour the spikes and label the asks
+  g.font = "600 12px " + col("--mono"); g.textAlign = "center";
+  const answered = new Set(spikes.filter((a) => a.kind !== "challenge_issued").map((a) => a.detail.split(" ")[0]));
+  let lastLabel = 1e9;
+  for (const a of [...spikes].reverse()) {
+    const xx = a.x; if (xx < 0) continue;
+    const id = a.detail.split(" ")[0];
+    if (a.kind === "challenge_issued") {
+      g.fillStyle = col("--blue");
+      if (lastLabel - xx > 46) { g.fillText(label(a.detail), xx, mid - amp - 6); lastLabel = xx; }
+      g.beginPath(); g.arc(xx, mid - amp, 3, 0, 7); g.fill();
+      if (!answered.has(id) && now - a.time > 6) { g.fillStyle = col("--amber"); g.fillText("?", xx + 12, mid - amp * 0.4); }
+    } else {
+      const c = a.kind === "challenge_ok" ? col("--green") : col("--red");
+      g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.moveTo(xx - 4, mid); g.lineTo(xx, mid + amp * 0.8); g.lineTo(xx + 4, mid); g.stroke();
+      if (a.kind !== "challenge_ok") { g.fillStyle = c; g.fillText("✗", xx, mid + amp * 0.8 + 16); }
     }
-    function renderReconciliation(reconciliation) {
-      const container = $('reconciliation');
-      container.replaceChildren();
-      const labels = {
-        ok: ['ok', 'MATCH'],
-        mismatch: ['bad', 'MISMATCH'],
-        unavailable: ['warn', 'SOURCE UNAVAILABLE'],
-        checking: ['warn', 'CHECKING']
-      };
-      const [state, label] = labels[reconciliation.state] || labels.checking;
-      $('reconciliation-state').className = 'pill ' + state;
-      $('reconciliation-state').textContent = label;
-      container.append(node('p',
-        'Witnessed transactions checked: ' + reconciliation.checked_transactions +
-        (reconciliation.checked_at ? ' · Last check: ' + date(reconciliation.checked_at) : ''),
-        'sub'));
-      if (reconciliation.state === 'unavailable') {
-        container.append(node('p', 'The bank source could not be checked; an outage is not proof of tampering.', 'empty'));
-        if (reconciliation.mismatches && reconciliation.mismatches.length) {
-          container.append(node('p', 'Mismatch details below are from the last successful bank check.', 'empty'));
-        }
-      }
-      for (const mismatch of reconciliation.mismatches || []) {
-        const item = node('div', '', 'mismatch');
-        item.append(node('strong', 'Transaction ' + mismatch.transaction_id + ': ' + mismatch.issue));
-        const bankAmount = Number.isSafeInteger(mismatch.bank_amount_minor)
-          ? money(mismatch.bank_amount_minor) : 'missing';
-        item.append(node('div',
-          'Witness recorded ' + money(mismatch.witnessed_amount_minor) +
-          ' (' + (mismatch.witnessed_type || 'unknown type') + '); bank reports ' +
-          bankAmount + (mismatch.bank_type ? ' (' + mismatch.bank_type + ')' : '') + '.'));
-        container.append(item);
-      }
-      if (reconciliation.state === 'ok') {
-        container.append(node('p', 'Bank records match the committed witnessed transactions.', 'sub'));
-      }
-      if (!['ok', 'mismatch', 'unavailable'].includes(reconciliation.state)) {
-        container.append(node('p', 'The first reconciliation request is in progress.', 'empty'));
-      }
-    }
-    function renderEvents(events) {
-      const container = $('events');
-      container.replaceChildren();
-      if (!events.length) {
-        container.append(node('p', 'No transaction events received yet.', 'empty'));
-      } else {
-        const table = document.createElement('table');
-        const head = document.createElement('thead');
-        const headings = document.createElement('tr');
-        for (const label of ['Seq', 'Transaction', 'Type', 'Amount', 'State', 'Recorded']) {
-          headings.append(node('th', label));
-        }
-        head.append(headings);
-        const body = document.createElement('tbody');
-        for (const event of events) {
-          const row = document.createElement('tr');
-          for (const value of [
-            event.prepare_seq,
-            event.transaction_id,
-            event.type,
-            money(event.amount_minor),
-            event.state,
-            date(event.updated_at)
-          ]) {
-            row.append(node('td', String(value), 'm'));
-          }
-          body.append(row);
-        }
-        table.append(head, body);
-        container.append(table);
-      }
-      const strip = $('event-strip');
-      strip.replaceChildren();
-      const chronological = [...events].reverse();
-      for (const event of chronological) {
-        const bar = node('span', '');
-        bar.className = 'event-bar ' + (event.state === 'aborted' ? 'aborted' :
-          event.state === 'prepared' ? 'prepared' : '');
-        bar.title = 'Transaction ' + event.transaction_id + ': ' + event.state;
-        strip.append(bar);
-      }
-      strip.setAttribute('aria-label', chronological.length
-        ? chronological.length + ' recent transaction events; latest state ' + chronological[chronological.length - 1].state
-        : 'No transaction activity yet');
-    }
-    async function refresh() {
-      const [statusResponse, eventsResponse] = await Promise.all([
-        fetch('/v1/status', { cache: 'no-store' }),
-        fetch('/v1/events', { cache: 'no-store' })
-      ]);
-      if (!statusResponse.ok || !eventsResponse.ok) throw new Error('Witness API returned an unsuccessful response.');
-      const status = await statusResponse.json();
-      const events = await eventsResponse.json();
-      if (!status.bank_reconciliation || !Array.isArray(events)) throw new Error('Witness API returned an invalid response.');
-      $('connection').className = 'conn live';
-      $('connection').textContent = 'CONNECTED';
-      renderIntegrity(status);
-      renderReconciliation(status.bank_reconciliation);
-      renderEvents(events);
-      if (!status.healthy || status.bank_reconciliation.state === 'mismatch') {
-        setLayerTwo('caught', 'ALERT');
-      } else if (status.bank_reconciliation.state === 'unavailable') {
-        setLayerTwo('checking', 'SOURCE UNAVAILABLE');
-      } else if (status.bank_reconciliation.state === 'checking') {
-        setLayerTwo('checking', 'CHECKING');
-      } else {
-        setLayerTwo('passed', 'VERIFIED');
-      }
-      $('updated-at').textContent = 'Updated ' + new Date().toLocaleTimeString();
-    }
-    async function poll() {
-      try {
-        await refresh();
-      } catch (error) {
-        $('connection').className = 'conn lost';
-        $('connection').textContent = 'CONNECTION ERROR';
-        $('integrity').className = 'banner warn';
-        $('integrity').replaceChildren(node('strong', 'Unable to load witness data'));
-        $('integrity').append(node('p', error.message));
-        setLayerTwo('checking', 'CONNECTION ERROR');
-      }
-    }
-    void poll();
-    setInterval(poll, 5000);
-  </script>
+  }
+  g.fillStyle = col("--muted");
+  for (const b of beats) { const xx = x(b.time); if (xx >= 0) { g.beginPath(); g.arc(xx, mid, 2.5, 0, 7); g.fill(); } }
+  g.textAlign = "left"; g.font = "12px " + col("--mono");
+  g.fillText(dead ? "NO HEARTBEAT" : `heartbeat ${S ? (S.heartbeat_age ?? 0).toFixed(0) : 0}s ago`, 6, H - 8);
+  g.textAlign = "right"; g.fillText(`−${WINDOW}s … now`, W - 6, H - 8);
+}
+
+function renderAll() {
+  if (!S) return;
+  const conn = S.quarantine && S.quarantine.active ? "quarantined" : S.connection;
+  $("conn").className = "conn " + conn; $("conn").textContent = conn.toUpperCase();
+  renderCards(layerState()); renderMain();
+}
+
+async function poll() {
+  if (mode !== "live") return;
+  try {
+    const [s, a, ev, mm, act] = await Promise.all([j("/status"), j("/alerts"), j("/timeline"), j("/mismatches"), j("/activity?since_id=" + lastAct)]);
+    S = s; alerts = a.alerts; events = ev.events; mism = mm.mismatches;
+    offset = s.server_time - Date.now() / 1000;
+    for (const r of act.activity) { acts.push(r); lastAct = Math.max(lastAct, r.id); }
+    acts = acts.filter((r) => r.time > s.server_time - 200);
+    renderAll();
+  } catch (e) {
+    $("conn").className = "conn lost"; $("conn").textContent = "WITNESS UNREACHABLE";
+  }
+}
+
+// ---------- Preview: sample data so every screen can be shown without a running server ----------
+let mode = "live", approvals = new Set();
+const iso = (t) => new Date(t * 1000).toISOString();
+function sampleActs(now, scenario) {
+  const out = []; let id = 1;
+  const quiet = scenario === "l3" ? now - 52 : now;  // network cut 52 s ago in the Layer 3 preview
+  for (let t = now - 70; t < quiet; t += 5) out.push({ id: id++, time: t, kind: "heartbeat", detail: "log-server-1" });
+  const seqs = [37, 12, 88, 64, 101, 23, 119, 45, 76, 9, 112, 58, 30, 95];
+  let k = 0;
+  for (let t = now - 68; t < quiet - 1; t += 4.3, k++) {
+    const c = "c-" + (1000 + k), n = seqs[k % seqs.length];
+    const what = k % 5 === 4 ? `sweep #1-#${120 + k}` : k % 5 === 2 ? "state acc-2" : `record #${n}`;
+    out.push({ id: id++, time: t, kind: "challenge_issued", detail: `${c} ${what}` });
+    const bad = scenario === "l2" && k % 5 === 4 && t > now - 25;
+    out.push({ id: id++, time: t + 0.6, kind: bad ? "challenge_failed" : "challenge_ok",
+      detail: bad ? `${c} ${what}: tampered #42, #57` : `${c} ${what} matches` });
+  }
+  return out.sort((a, b) => a.time - b.time);
+}
+function buildPreview(scenario) {
+  const now = Date.now() / 1000;
+  S = { platform_id: "log-server-1", connection: "connected", heartbeat_age: now % 5, server_time: now,
+        records_verified: 128, last_verified: { seq: 128, time: iso(now - 1) }, last_sweep: now - 6,
+        layers: { 1: "on", 2: "on", 3: "on" }, checks: { A: "green", B: "green", C: "green" }, state: "normal", quarantine: null };
+  alerts = []; events = []; mism = []; acts = sampleActs(now, scenario); offset = 0;
+  const who = { user: "admin", uid: 1000, src_ip: "10.0.4.17" }, eve = { user: "ops-backup", uid: 1003, src_ip: "185.220.101.4" };
+  if (scenario === "l1" || scenario === "l2") {
+    events = [
+      { layer: 1, trigger: "authorized:nano", state: "normal", time: iso(now - 300), who, detail: { cmd: "nano /var/log/bank/app.log", result: "allowed (profile demo-bank)" } },
+      { layer: 1, trigger: "wrapper:vim", state: "alert", time: iso(now - 40), who: eve, detail: { cmd: "vim /var/log/bank/app.log", result: "deceived (decoy)", rule: "Editor 'vim' used without a profile-id" } },
+      { layer: 1, trigger: "deception:vim", state: "alert", time: iso(now - 31), who: eve, detail: { cmd: "vim /var/log/bank/app.log", result: "edit captured, real file untouched",
+        diff: "--- /var/log/bank/app.log\n+++ /var/log/bank/app.log (attempted)\n@@ -42 +42 @@\n-txn-00042 ACC-1031 -> ACC-2210 5000.00\n+txn-00042 ACC-1031 -> ACC-2210 50.00\n" } },
+      { layer: 1, trigger: "wrapper:rm", state: "alert", time: iso(now - 22), who: eve, detail: { cmd: "rm /var/log/bank/audit.log", result: "deceived (decoy)", rule: "Write to protected path /var/log/bank/audit.log without a profile-id" } },
+    ];
+    alerts = events.filter((e) => e.state === "alert").map((e, i) => ({ kind: "layer1_tripwire", ref: "ev-" + i, tamper_type: null, detail: e.detail.cmd, time: Date.parse(e.time) / 1000, resolved: 0 }));
+    S.layers[1] = "tripped"; S.state = "alert";
+  }
+  if (scenario === "l2") {
+    const rec = (seq, amt, from, to) => ({ txn_id: `txn-000${seq}`, timestamp: iso(now - 3600 + seq * 20), from_account: from, to_account: to,
+      amount_paise: amt, from_balance_paise: 18250000, to_balance_paise: 9120000 });
+    mism = [
+      { seq: 42, caught_time: now - 12, caught_by: "sweep #1-#124", fields: ["amount_paise"], witness_copy: rec(42, 500000, "ACC-1031", "ACC-2210"),
+        server_copy: rec(42, 5000, "ACC-1031", "ACC-2210"), witness_hash: "3fa9c1d07be21e8a", server_hash: "91cc4ab2e5f0707b" },
+      { seq: 57, caught_time: now - 11, caught_by: "full sweep #1-#128", fields: ["to_account"], witness_copy: rec(57, 120000, "ACC-1031", "ACC-2210"),
+        server_copy: rec(57, 120000, "ACC-1031", "ACC-9999"), witness_hash: "a17e00c3", server_hash: "5be2d9f1" },
+    ];
+    alerts = alerts.concat(mism.map((m) => ({ kind: "record_mismatch", ref: String(m.seq), tamper_type: "entry_edited", detail: "", time: m.caught_time, resolved: 0 })),
+      [{ kind: "db_edited_without_log", ref: "acc-2", tamper_type: "db_edited_without_log", detail: "ACC-2210 bank balance 101200.00, witness replay 91200.00", time: now - 8, resolved: 0 }]);
+    S.checks = { A: "red", B: "green", C: "red" };
+  }
+  if (scenario === "l3") {
+    const holders = ["SOC lead", "Auditor", "Compliance officer"].map((name, i) => ({ name, approved: approvals.has(i) }));
+    if (approvals.size >= 2) { approvals.clear(); setTimeout(() => setMode("normal"), 1500); }
+    S.connection = "lost"; S.heartbeat_age = 52; S.state = "quarantined"; S.layers[3] = "quarantined";
+    S.checks.B = "red"; S.last_verified = { seq: 128, time: iso(now - 52) };
+    S.quarantine = { active: true, since: now - 52, confirmed: false, id: null, unverified: null, after: 45, needed: 2, holders, unlock_issued: false };
+    alerts = [{ kind: "silence", ref: "x", tamper_type: "agent_silenced", detail: "no valid heartbeat for over 15 s", time: now - 37, resolved: 0 }];
+    events = [{ layer: 3, trigger: "quarantine:locked", state: "alert", time: iso(now - 7), detail: { quarantine_id: null, dry_run: false,
+      site_down: [{ cmd: "docker compose stop frontend" }], lockout: [{ cmd: "touch /etc/nologin" }, { cmd: "passwd -l root" }, { cmd: "passwd -l admin" },
+      { cmd: "loginctl terminate-user root" }, { cmd: "loginctl terminate-user admin" }] } }];
+  }
+}
+function setMode(m) {
+  mode = m; approvals.clear();
+  document.querySelectorAll("#pv button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.pv === m)));
+  $("pvnote").hidden = m === "live";
+  view = { normal: 0, l1: 1, l2: 2, l3: 3 }[m] ?? 0; pinned = m !== "live";
+  prevCaught = { 1: 0, 2: 0, 3: 0 }; $("main").dataset.html = "";
+  if (m === "live") { acts = []; lastAct = 0; poll(); } else { buildPreview(m); renderAll(); }
+}
+$("pv").addEventListener("click", (e) => { const b = e.target.closest("button[data-pv]"); if (b) setMode(b.dataset.pv); });
+
+if (["#normal", "#l1", "#l2", "#l3"].includes(location.hash)) setMode(location.hash.slice(1));
+poll(); setInterval(() => (mode === "live" ? poll() : (buildPreview(mode), renderAll())), 1000);
+(function loop() { drawMonitor(); requestAnimationFrame(loop); })();
+</script>
 </body>
 </html>
