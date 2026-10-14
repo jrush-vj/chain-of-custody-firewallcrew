@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WitnessStore } from '../store.js';
+import { reconcileBankTransactions } from '../reconcile.js';
 
 process.env.WITNESS_NODE_ID = 'test-node';
 process.env.WITNESS_HMAC_SECRET = 'test-secret-value-with-at-least-32-characters';
@@ -80,6 +81,53 @@ test('serves an integrity alert and disables writes when the ledger is altered',
       type: 'withdrawal',
       amount_minor: 100,
       occurred_at: '2026-10-14T10:00:00.000Z'
+    });
+
+    test('detects changed or missing bank rows during independent reconciliation', async () => {
+      const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-reconcile-'));
+      const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+      process.env.BANK_RECONCILE_URL = 'https://bank.example.test/api/transactions/witness-reconcile';
+      try {
+        await store.initialize();
+        for (const [eventId, transactionId] of [
+          ['c80ba038-26ef-4d2f-84a8-e504a67ec7e6', 12],
+          ['fd808249-0454-412c-800f-541a2526831f', 13]
+        ]) {
+          await store.prepare({
+            event_id: eventId,
+            transaction_id: transactionId,
+            type: 'withdrawal',
+            amount_minor: 100,
+            occurred_at: '2026-10-14T10:00:00.000Z'
+          });
+          await store.transition(eventId, 'commit');
+        }
+
+        const result = await reconcileBankTransactions(store, async (url) => {
+          assert.equal(url.hostname, 'bank.example.test');
+          assert.equal(url.pathname, '/api/transactions/witness-reconcile');
+          return new Response(JSON.stringify({
+            transactions: [{
+              transaction_id: 12,
+              type: 'withdrawal',
+              amount_minor: '10000',
+              event_id: 'c80ba038-26ef-4d2f-84a8-e504a67ec7e6'
+            }]
+          }), { status: 200 });
+        });
+
+        assert.equal(result.state, 'mismatch');
+        assert.deepEqual(
+          result.mismatches.map(({ transaction_id, issue }) => ({ transaction_id, issue })),
+          [
+            { transaction_id: 12, issue: 'changed_amount' },
+            { transaction_id: 13, issue: 'missing' }
+          ]
+        );
+      } finally {
+        delete process.env.BANK_RECONCILE_URL;
+        await rm(directory, { recursive: true, force: true });
+      }
     });
     const contents = await readFile(ledger, 'utf8');
     await writeFile(ledger, contents.replace('"amount_minor":100', '"amount_minor":10000'));

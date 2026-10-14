@@ -14,6 +14,12 @@ export class WitnessStore {
     this.events = new Map();
     this.queue = Promise.resolve();
     this.integrityError = null;
+    this.reconciliation = {
+      state: 'checking',
+      checked_at: null,
+      checked_transactions: 0,
+      mismatches: []
+    };
   }
 
   async initialize() {
@@ -178,6 +184,32 @@ export class WitnessStore {
     });
   }
 
+  committedEvents() {
+    if (this.integrityError) {
+      return [];
+    }
+    return [...this.events.entries()]
+      .filter(([, item]) => item.state === 'committed')
+      .map(([eventId, item]) => ({ ...item.event, event_id: eventId }));
+  }
+
+  setReconciliation(result) {
+    this.reconciliation = {
+      ...result,
+      checked_at: new Date().toISOString()
+    };
+  }
+
+  setReconciliationUnavailable(error) {
+    this.reconciliation = {
+      ...this.reconciliation,
+      state: 'unavailable',
+      error: 'Bank transaction source could not be checked.',
+      last_error: error,
+      checked_at: new Date().toISOString()
+    };
+  }
+
   status() {
     return {
       healthy: !this.integrityError,
@@ -187,7 +219,8 @@ export class WitnessStore {
       record_count: this.records.length,
       latest_seq: this.records.at(-1)?.seq || 0,
       latest_hash: this.records.at(-1)?.hash || ZERO_HASH,
-      prepared_count: [...this.events.values()].filter((event) => event.state === 'prepared').length
+      prepared_count: [...this.events.values()].filter((event) => event.state === 'prepared').length,
+      bank_reconciliation: this.reconciliation
     };
   }
 

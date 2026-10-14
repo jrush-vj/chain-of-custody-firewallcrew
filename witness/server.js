@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WitnessStore } from './store.js';
+import { startBankReconciliation } from './reconcile.js';
 
 const port = Number(process.env.WITNESS_PORT || 8787);
 const bindHost = process.env.WITNESS_BIND_HOST || '127.0.0.1';
@@ -21,7 +22,7 @@ const html = `<!doctype html>
     body{font:16px system-ui,sans-serif;background:#0b1020;color:#e8edf8;margin:0;padding:2rem}
     main{max-width:1100px;margin:auto}h1{margin-bottom:.25rem}
     .muted{color:#9eabc4}.card{background:#151d32;border:1px solid #2c3854;border-radius:12px;padding:1rem;margin:1rem 0}
-    .status{font-weight:700}.ok{color:#5ee0a0}.bad{color:#ff7885}
+    .status{font-weight:700}.ok{color:#5ee0a0}.bad{color:#ff7885}.warn{color:#ffd166}
     table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.7rem;border-bottom:1px solid #2c3854}
     code{word-break:break-all}
   </style>
@@ -30,6 +31,7 @@ const html = `<!doctype html>
   <h1>Banking Witness</h1>
   <div class="muted">Independent transaction evidence receiver</div>
   <section class="card" id="status">Loading witness status…</section>
+  <section class="card" id="reconciliation">Checking bank transaction records…</section>
   <section class="card"><h2>Recent events</h2><div id="events">Loading…</div></section>
   <script>
     const escapeText = (value) => String(value ?? '');
@@ -58,6 +60,43 @@ const html = `<!doctype html>
       const hash = document.createElement('code');
       hash.textContent = status.latest_hash;
       statusNode.append(hash);
+
+      const reconciliationNode = document.getElementById('reconciliation');
+      reconciliationNode.replaceChildren();
+      const reconciliation = status.bank_reconciliation;
+      const reconciliationHeading = document.createElement('div');
+      reconciliationHeading.className = 'status ' + (
+        reconciliation.state === 'ok' ? 'ok' :
+          reconciliation.state === 'mismatch' ? 'bad' : 'warn'
+      );
+      reconciliationHeading.textContent = reconciliation.state === 'ok'
+        ? 'Bank records match witnessed transactions'
+        : reconciliation.state === 'mismatch'
+          ? 'BANK TRANSACTION TAMPERING DETECTED'
+          : reconciliation.state === 'unavailable'
+            ? 'Bank records could not be checked'
+            : 'Checking bank records…';
+      reconciliationNode.append(reconciliationHeading);
+      const reconciliationSummary = document.createElement('p');
+      reconciliationSummary.textContent =
+        'Witnessed transactions checked: ' + reconciliation.checked_transactions +
+        (reconciliation.checked_at ? ' · Last check: ' + reconciliation.checked_at : '');
+      reconciliationNode.append(reconciliationSummary);
+      if (reconciliation.state === 'unavailable') {
+        const unavailable = document.createElement('p');
+        unavailable.textContent = 'Bank source is unavailable; this is not proof of tampering.';
+        reconciliationNode.append(unavailable);
+      }
+      for (const mismatch of reconciliation.mismatches || []) {
+        const item = document.createElement('p');
+        const witnessedAmount = (mismatch.witnessed_amount_minor / 100).toFixed(2);
+        const bankAmount = Number.isSafeInteger(mismatch.bank_amount_minor)
+          ? (mismatch.bank_amount_minor / 100).toFixed(2)
+          : 'missing';
+        item.textContent = 'Transaction ' + mismatch.transaction_id + ': ' + mismatch.issue +
+          '; witnessed $' + witnessedAmount + ', bank record $' + bankAmount;
+        reconciliationNode.append(item);
+      }
 
       const container = document.getElementById('events');
       container.replaceChildren();
@@ -266,6 +305,7 @@ const start = async () => {
     console.error('Witness ledger integrity validation failed; entering read-only alert mode:', error.message);
   }
   const server = createWitnessServer(store);
+  startBankReconciliation(store);
   server.listen(port, bindHost, () => {
     console.log(`Witness listening on ${bindHost}:${port}; ledger ${dataPath}`);
   });

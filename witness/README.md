@@ -55,6 +55,7 @@ sudo install -d -o root -g root -m 0755 /opt/banking-witness
 sudo install -d -o banking-witness -g banking-witness -m 0700 /var/lib/banking-witness
 sudo install -m 0644 /opt/coc-witness-source/witness/server.js /opt/banking-witness/server.js
 sudo install -m 0644 /opt/coc-witness-source/witness/store.js /opt/banking-witness/store.js
+sudo install -m 0644 /opt/coc-witness-source/witness/reconcile.js /opt/banking-witness/reconcile.js
 sudo install -m 0644 /opt/coc-witness-source/witness/package.json /opt/banking-witness/package.json
 sudo install -m 0644 /opt/coc-witness-source/witness/banking-witness.service /etc/systemd/system/banking-witness.service
 sudo install -d -o root -g root -m 0750 /etc/banking-witness
@@ -118,6 +119,29 @@ amount, transaction ID, and witness state. It contains no account numbers or
 customer identifiers. Protect the dashboard with Cloudflare Access if it
 should not be public.
 
+The witness also polls
+`https://bank.jrushvj.dev/api/transactions/witness-reconcile` every 30 seconds
+for the current type, amount, and witness event ID of transactions already
+committed to its independent ledger. The endpoint only returns rows for the
+requested transaction IDs and does not return account or customer data. A
+changed or missing row produces a red dashboard alert. If ct105 is unreachable,
+the dashboard says reconciliation is unavailable; an outage is not claimed to
+be proof of tampering. Root on ct105 can still alter the API to lie or suppress
+the check, so this is a demonstration against database-record edits while the
+bank API continues to run normally—not guaranteed detection of a fully
+compromised host.
+
+For this reconciliation update, fast-forward the clean Oracle source checkout
+to `main`, stop the witness, install `server.js`, `store.js`, `reconcile.js`,
+and `package.json` from `/opt/coc-witness-source/witness/` into
+`/opt/banking-witness/`, then start the witness again. On ct105, fast-forward
+`/opt/chain-of-custody-firewallcrew` to `main` and rebuild only the backend and
+frontend with Compose project `banking-system`. Preserve the local
+`docker-compose.yml` mappings for ports `8081` and `3001`; do not recreate or
+delete the PostgreSQL volume. The bank endpoint is available after the updated
+backend starts. The dashboard reports source-unavailable until its first
+successful poll.
+
 ## Integrity and limits
 
 - On startup the service verifies sequence continuity and every ledger hash.
@@ -133,8 +157,8 @@ should not be public.
 - HMAC protects the endpoint against unauthenticated network writes, not
   against root on ct105, which can read the shared key and change the producer.
 - The dashboard is a view of events received by Oracle. It does not reconcile
-  those events against PostgreSQL or prove that every bank transaction was
-  reported; a compromised producer can suppress events before transmission.
+  events that were never reported by the producer; a compromised producer can
+  suppress events before transmission.
 - This is a hackathon/demo witness, not a production financial control or
   compliance system.
 
@@ -163,3 +187,28 @@ sudo bash /opt/coc-witness-source/witness/demo-ledger-tamper.sh restore
 Wait for `{"status":"ok"}` and refresh the dashboard before resuming demo
 transactions. The script refuses to overwrite an existing demo backup or
 change anything unless exactly one matching $1 withdrawal is found.
+
+## Demonstrating a ct105 database edit
+
+The witness dashboard independently polls the bank API and compares the
+current database row to the committed Oracle evidence. For a demo $1
+withdrawal, on ct105 change only the transaction amount (not the account
+balance), replacing `TRANSACTION_ID` with that withdrawal's ID:
+
+```bash
+sudo docker compose -p banking-system exec -T postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P pager=off -c "UPDATE transactions SET amount = 100.00 WHERE id = TRANSACTION_ID;"'
+```
+
+Within about 30 seconds the dashboard should show `BANK TRANSACTION TAMPERING
+DETECTED` and compare the bank's $100 record with the witnessed $1 event.
+Restore the demo record on ct105:
+
+```bash
+sudo docker compose -p banking-system exec -T postgres sh -lc 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -P pager=off -c "UPDATE transactions SET amount = 1.00 WHERE id = TRANSACTION_ID;"'
+```
+
+After the next polling cycle, the alert should clear. Run only against demo
+transactions; changing a transaction record does not adjust the account
+balance and must not be represented as an actual reversal. Root can also
+modify the API or block Oracle's poll, so an unavailable-source warning is
+shown separately.

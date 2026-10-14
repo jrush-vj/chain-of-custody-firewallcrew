@@ -10,6 +10,7 @@ import {
 } from '../middleware/validation.js';
 import { requireExternalApiKey } from '../middleware/externalApiKey.js';
 import { executeWitnessedTransaction } from '../services/witnessedTransactions.js';
+import { getPool } from '../config/database.js';
 
 const router = express.Router();
 
@@ -94,6 +95,40 @@ router.post(
     }
   }
 );
+
+router.get('/witness-reconcile', async (req, res, next) => {
+  try {
+    const rawIds = req.query.transaction_ids;
+    if (typeof rawIds !== 'string') {
+      return res.status(400).json({ error: 'transaction_ids is required' });
+    }
+    const ids = rawIds.split(',').map((value) => Number(value));
+    if (
+      ids.length < 1 ||
+      ids.length > 100 ||
+      ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+      new Set(ids).size !== ids.length
+    ) {
+      return res.status(400).json({ error: 'transaction_ids must contain 1 to 100 unique positive integers' });
+    }
+
+    const { rows } = await getPool().query(
+      `SELECT t.id AS transaction_id,
+              t.type,
+              (t.amount * 100)::bigint AS amount_minor,
+              o.event_id
+       FROM transactions t
+       JOIN witness_outbox o ON o.transaction_id = t.id
+       WHERE t.id = ANY($1::int[])
+         AND o.status = 'confirmed'`,
+      [ids]
+    );
+    res.set('Cache-Control', 'no-store');
+    return res.json({ transactions: rows });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.use(authenticateToken);
 
