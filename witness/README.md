@@ -55,6 +55,7 @@ sudo install -d -o root -g root -m 0755 /opt/banking-witness
 sudo install -d -o banking-witness -g banking-witness -m 0700 /var/lib/banking-witness
 sudo install -m 0644 /opt/coc-witness-source/witness/server.js /opt/banking-witness/server.js
 sudo install -m 0644 /opt/coc-witness-source/witness/store.js /opt/banking-witness/store.js
+sudo install -m 0644 /opt/coc-witness-source/witness/package.json /opt/banking-witness/package.json
 sudo install -m 0644 /opt/coc-witness-source/witness/banking-witness.service /etc/systemd/system/banking-witness.service
 sudo install -d -o root -g root -m 0750 /etc/banking-witness
 sudo sh -c 'umask 077; cat > /etc/banking-witness/witness.env' <<'EOF'
