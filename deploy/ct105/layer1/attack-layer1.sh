@@ -17,6 +17,14 @@ if [ "${COC_SKIP_HOST_CHECK:-0}" != 1 ] && [ "$(hostname)" != ct105-ai ]; then
   echo "WRONG HOST: $(hostname)"; exit 1
 fi
 
+trip_bin="${COC_TRIP_BIN:-/usr/local/coc-trip/bin}"
+if [ -d "$trip_bin" ]; then
+  export PATH="$trip_bin:$PATH"   # honeypot wrappers first, so the watched commands are recorded
+  echo "honeypot wrappers active: $trip_bin"
+else
+  echo "WARNING: honeypot wrappers not installed; these commands will not be recorded"
+fi
+
 log_dir="${LOG_DIR:-/var/log/bank-demo}"
 log_file="$log_dir/app.log"
 pause_s="${PAUSE_S:-12}"   # longer than the monitor's poll, so each attack is visible on its own

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Layer 1 monitor for ct105: reports tripwire activity on the protected bank log to the witness.
 
-Two sources, both reported as signed layer-1 events:
-  1. Commands: auditd records for the watched commands (rules in audit-rules.conf, key coc_l1)
-     whose arguments touch WATCH_DIR. Each one is an alert with the command, who ran it and where.
+Three kinds of event, all sent as signed layer-1 events:
+  1. Commands: lines the honeypot wrappers (coc-trip-wrapper.sh) append to the spool when a watched
+     command's arguments touch WATCH_DIR. Each one is an alert with the command, who ran it and where.
   2. Files: the content of WATCH_DIR compared with the approved baseline. A change that matches the
-     approved copy is reported as "restored" (state normal); any other change is an alert.
-The monitor also checks that the auditd rules are loaded and reports when they are armed or disarmed.
+     approved copy is reported as "restored" (state normal); any other change is an alert, with the
+     original and current content.
+  3. Tripwire status: whether the wrappers and the login profile are in place. Reported on change.
 
 Detection only: nothing is blocked. Standard library only.
 
@@ -16,7 +17,9 @@ Approved state lives in STATE_DIR/baseline/. The first run copies the current fi
 Environment:
   WATCH_DIR            default /var/log/bank-demo
   STATE_DIR            default /var/lib/coc-layer1
-  AUDIT_LOG            default /var/log/audit/audit.log
+  COMMANDS_SPOOL       default /var/spool/coc-layer1/commands.jsonl
+  TRIP_BIN             default /usr/local/coc-trip/bin
+  PROFILE_FILE         default /etc/profile.d/coc-layer1.sh
   WITNESS_URL          e.g. https://witness.jrushvj.dev
   WITNESS_NODE_ID      e.g. ct105-ai
   WITNESS_HMAC_SECRET  same secret the banking witness uses; never printed
@@ -32,9 +35,7 @@ import hashlib
 import hmac
 import json
 import os
-import re
 import shutil
-import subprocess
 import sys
 import time
 import urllib.error
@@ -43,16 +44,16 @@ from datetime import datetime, timezone
 
 WATCH_DIR = os.environ.get("WATCH_DIR", "/var/log/bank-demo")
 STATE_DIR = os.environ.get("STATE_DIR", "/var/lib/coc-layer1")
-AUDIT_LOG = os.environ.get("AUDIT_LOG", "/var/log/audit/audit.log")
+COMMANDS_SPOOL = os.environ.get("COMMANDS_SPOOL", "/var/spool/coc-layer1/commands.jsonl")
+TRIP_BIN = os.environ.get("TRIP_BIN", "/usr/local/coc-trip/bin")
+PROFILE_FILE = os.environ.get("PROFILE_FILE", "/etc/profile.d/coc-layer1.sh")
 BASELINE_DIR = os.path.join(STATE_DIR, "baseline")
-OFFSET_FILE = os.path.join(STATE_DIR, "audit.offset")
+OFFSET_FILE = os.path.join(STATE_DIR, "commands.offset")
 POLL_S = float(os.environ.get("POLL_S", "2"))
-AUDIT_KEY = "coc_l1"
 SNAPSHOT_LIMIT = 3000  # keeps one event well under the witness's 16 KB request limit
 SUMMARY_LIMIT = 200
-
-AUDIT_LINE = re.compile(r"^type=(\w+) msg=audit\((\d+\.\d+):(\d+)\): (.*)$")
-AUDIT_FIELD = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)')
+ARM_CHECK_S = 10
+WRAPPED_COMMANDS = ["nano", "vi", "vim", "sed", "rm", "mv", "cp", "truncate", "shred", "tee"]
 
 
 def log(message):
@@ -61,6 +62,10 @@ def log(message):
 
 def clip(text, limit=SNAPSHOT_LIMIT):
     return text if len(text) <= limit else text[:limit] + "\n...(truncated)"
+
+
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 # ---------- file baseline ----------
@@ -144,100 +149,60 @@ def file_event(name, previous_hash, current_hash, approved_hash):
             "approved_content": clip(approved_text) if approved_hash else "(no approved copy)",
             "current_content": clip(current_text) if current_hash else "(file removed)",
             "diff": clip(diff),
-            "observed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "observed_at": now_iso(),
         },
     }
 
 
-# ---------- auditd command capture ----------
+# ---------- honeypot command spool ----------
 
-def decode_audit_value(key, raw):
-    """auditd quotes printable values and hex-encodes the rest; only argument fields need decoding."""
-    if raw.startswith('"'):
-        return raw[1:-1]
-    if (key == "proctitle" or re.fullmatch(r"a\d+", key)) and re.fullmatch(r"[0-9A-Fa-f]+", raw) and len(raw) % 2 == 0:
-        return bytes.fromhex(raw).decode("utf-8", errors="replace").replace("\x00", " ")
-    return raw
-
-
-def parse_fields(text):
-    return {key: decode_audit_value(key, raw) for key, raw in AUDIT_FIELD.findall(text)}
-
-
-def user_name(uid_text):
-    try:
-        import pwd  # Linux only; the monitor runs on ct105
-        return pwd.getpwuid(int(uid_text)).pw_name
-    except (ImportError, KeyError, ValueError, TypeError):
-        return f"uid {uid_text}"
-
-
-def command_event(group):
-    """Build an alert from one audit event (all records sharing a serial), or None if not ours."""
-    syscall = group.get("SYSCALL")
-    execve = group.get("EXECVE")
-    if not syscall or not execve or syscall.get("key") != AUDIT_KEY:
+def command_event(record):
+    """Alert for one spooled command, or None if it does not touch the watched path."""
+    command = str(record.get("command", ""))
+    args = str(record.get("args", ""))
+    if WATCH_DIR not in args:
         return None
-    argc = int(execve.get("argc", "0") or 0)
-    args = [execve.get(f"a{index}", "") for index in range(argc)]
-    if not any(WATCH_DIR in arg for arg in args):
-        return None  # the command ran, but not on the bank log path
-    command = " ".join(args)
-    auid = syscall.get("auid", "")
-    who_name = user_name(auid) if auid not in ("", "4294967295") else "unknown user"
-    cwd = group.get("CWD", {}).get("cwd", "")
-    summary = f"{who_name} ran on the bank log: {command}"
+    who = str(record.get("user", "unknown"))
+    cwd = str(record.get("cwd", ""))
+    tty = str(record.get("tty", ""))
+    text = f"{command} {args}".strip()
+    observed = datetime.fromtimestamp(float(record.get("ts", time.time())), timezone.utc)
     return {
         "layer": 1,
         "trigger": "command_executed",
         "state": "alert",
-        "summary": summary[:SUMMARY_LIMIT],
+        "summary": f"{who} ran on the bank log: {text}"[:SUMMARY_LIMIT],
         "detail": {
-            "cmd": command,
+            "cmd": text,
             "result": "caught",
             "rule": "Command run on the protected bank log path",
-            "exe": syscall.get("exe", ""),
             "cwd": cwd,
-            "tty": syscall.get("tty", ""),
-            "pid": syscall.get("pid", ""),
-            "observed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "tty": tty,
+            "observed_at": observed.isoformat(timespec="seconds"),
         },
-        "who": {
-            "user": who_name,
-            "auid": auid,
-            "uid": syscall.get("uid", ""),
-            "tty": syscall.get("tty", ""),
-            "cwd": cwd,
-            "src_ip": "local",
-        },
+        "who": {"user": who, "cwd": cwd, "tty": tty, "src_ip": "local"},
     }
 
 
-def read_new_audit_events(state):
-    """Return alert events for new watched commands in the audit log since the last call."""
-    if not os.path.exists(AUDIT_LOG):
+def read_new_commands(state):
+    """Alert events for spool lines appended since the last call."""
+    if not os.path.exists(COMMANDS_SPOOL):
         return []
-    size = os.path.getsize(AUDIT_LOG)
-    if size < state["offset"]:
-        state["offset"] = 0  # log rotated
-    with open(AUDIT_LOG, "rb") as handle:
+    if os.path.getsize(COMMANDS_SPOOL) < state["offset"]:
+        state["offset"] = 0  # spool was truncated or rotated
+    events = []
+    with open(COMMANDS_SPOOL, "rb") as handle:
         handle.seek(state["offset"])
         chunk = handle.read()
         state["offset"] = handle.tell()
-    groups = state["groups"]
     for raw in chunk.decode("utf-8", errors="replace").splitlines():
-        match = AUDIT_LINE.match(raw)
-        if not match:
+        try:
+            record = json.loads(raw)
+        except ValueError:
             continue
-        record_type, _, serial, body = match.groups()
-        groups.setdefault(serial, {})[record_type] = parse_fields(body)
-    events = []
-    for serial in list(groups):
-        event = command_event(groups[serial])
+        event = command_event(record)
         if event:
             events.append(event)
-        if event or "EXECVE" in groups[serial] or len(groups) > 200:
-            del groups[serial]  # complete (or stale): forget it
     return events
 
 
@@ -246,8 +211,8 @@ def load_offset():
         with open(OFFSET_FILE, encoding="utf-8") as handle:
             return int(handle.read().strip())
     except (OSError, ValueError):
-        # First start: begin at the end of the existing audit log, so old history is not replayed.
-        return os.path.getsize(AUDIT_LOG) if os.path.exists(AUDIT_LOG) else 0
+        # First start: begin at the end of the spool, so old lines are not replayed.
+        return os.path.getsize(COMMANDS_SPOOL) if os.path.exists(COMMANDS_SPOOL) else 0
 
 
 def save_offset(offset):
@@ -255,26 +220,24 @@ def save_offset(offset):
         handle.write(str(offset))
 
 
-# ---------- armed check ----------
+# ---------- tripwire status ----------
 
-def armed_status():
-    """(armed, rule_count) from auditd. Armed means the coc_l1 rules are loaded."""
-    try:
-        listing = subprocess.run(["auditctl", "-l"], capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.SubprocessError):
-        return False, 0
-    count = sum(1 for line in listing.splitlines() if f"-k {AUDIT_KEY}" in line or f"key={AUDIT_KEY}" in line)
-    return count > 0, count
+def tripwire_status():
+    """(armed, wrapper_count). Armed means the login profile exists and wrappers are installed."""
+    wrappers = [name for name in WRAPPED_COMMANDS if os.access(os.path.join(TRIP_BIN, name), os.X_OK)]
+    armed = os.path.isfile(PROFILE_FILE) and len(wrappers) > 0
+    return armed, len(wrappers)
 
 
-def armed_event(armed, count):
+def status_event(armed, count):
     if armed:
         return {"layer": 1, "trigger": "tripwire_armed", "state": "normal",
-                "summary": f"tripwire armed: {count} auditd rules loaded for the bank log",
+                "summary": f"tripwire armed: {count} honeypot commands wrapped on the bank log",
                 "detail": {"result": "armed", "rules": str(count)}}
     return {"layer": 1, "trigger": "tripwire_disarmed", "state": "alert",
-            "summary": "tripwire disarmed: auditd rules for the bank log are not loaded",
-            "detail": {"result": "disarmed", "rule": "Tripwire rules missing: commands are not being watched"}}
+            "summary": "tripwire disarmed: honeypot wrappers or login profile are missing",
+            "detail": {"result": "disarmed",
+                       "rule": "Honeypot wrappers missing: watched commands are not being recorded"}}
 
 
 # ---------- witness transport ----------
@@ -320,12 +283,12 @@ def run():
         approve()
 
     reported = dict(current_files())  # what the witness was last told about each file
-    audit_state = {"offset": load_offset(), "groups": {}}
-    save_offset(audit_state["offset"])
-    armed, count = armed_status()
-    pending = [armed_event(armed, count)]
-    last_armed, next_arm_check = armed, time.time() + 10
-    log(f"watching {WATCH_DIR} and auditd key {AUDIT_KEY} every {POLL_S}s; armed={armed} rules={count}")
+    state = {"offset": load_offset()}
+    save_offset(state["offset"])
+    armed, count = tripwire_status()
+    pending = [status_event(armed, count)]
+    last_armed, next_status_check = armed, time.time() + ARM_CHECK_S
+    log(f"watching {WATCH_DIR} and spool {COMMANDS_SPOOL}; armed={armed} wrappers={count}")
 
     while True:
         approved = baseline_hashes()
@@ -334,14 +297,14 @@ def run():
             if reported.get(name) != now.get(name):
                 pending.append(file_event(name, reported.get(name), now.get(name), approved.get(name)))
                 reported[name] = now.get(name)
-        pending.extend(read_new_audit_events(audit_state))
-        save_offset(audit_state["offset"])
-        if time.time() >= next_arm_check:
-            armed, count = armed_status()
+        pending.extend(read_new_commands(state))
+        save_offset(state["offset"])
+        if time.time() >= next_status_check:
+            armed, count = tripwire_status()
             if armed != last_armed:
-                pending.append(armed_event(armed, count))
+                pending.append(status_event(armed, count))
                 last_armed = armed
-            next_arm_check = time.time() + 10
+            next_status_check = time.time() + ARM_CHECK_S
 
         still_pending = []
         for event in pending:
