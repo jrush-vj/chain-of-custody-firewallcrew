@@ -32,7 +32,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 BANK_URL = os.environ.get("BANK_URL", "http://127.0.0.1:8081").rstrip("/")
@@ -47,8 +47,12 @@ MAX_CONSECUTIVE_FAILURES = 5
 WEIGHTS = (("transfer", 40), ("deposit", 25), ("withdraw", 20), ("external", 15))
 
 
+# Every time printed is Indian Standard Time, whatever the server's time zone is.
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
 def log(message):
-    print(f"{datetime.now().strftime('%H:%M:%S')} {message}", flush=True)
+    print(f"{datetime.now(IST).strftime('%H:%M:%S')} {message}", flush=True)
 
 
 # ---------- TOTP (RFC 6238), because the bank enforces two-factor ----------

@@ -82,6 +82,7 @@ button.ap:disabled{opacity:.35;cursor:default}
 .topr{display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
 .restore{font:700 14px var(--sans);padding:7px 14px;border-radius:8px;border:1px solid var(--amber);background:var(--amber);color:#1a1300;cursor:pointer}
 .restore:disabled{opacity:.5;cursor:default}
+.tz{font:600 12px var(--mono);color:var(--muted);letter-spacing:.06em;white-space:nowrap}
 .restore-msg{font:13px var(--mono);color:var(--muted);max-width:460px;text-align:right}
 .feed{list-style:none;padding:0;margin:0;font:16px/1.9 var(--mono)}.feed .m{color:var(--muted)}.okc{color:var(--green);font-weight:700}.badc{color:var(--red);font-weight:700}
 .card .ds{color:var(--muted);font-size:14px}
@@ -93,7 +94,7 @@ button.ap:disabled{opacity:.35;cursor:default}
 <body>
 <div class="app">
   <div class="top"><h1>Chain of Custody · Witness <span>auditor view</span></h1>
-    <div class="topr"><span class="restore-msg" id="restoremsg"></span><button class="restore" id="restore" type="button">Restore to normal</button><span class="conn" id="conn">CONNECTING</span></div></div>
+    <div class="topr"><span class="tz">All times IST</span><span class="restore-msg" id="restoremsg"></span><button class="restore" id="restore" type="button">Restore to normal</button><span class="conn" id="conn">CONNECTING</span></div></div>
   <section class="panel main" id="main" aria-live="polite"></section>
   <button class="panel card idle" id="c1" data-layer="1"><span class="lbl">Layer 1</span><span class="nm">Custom commands</span><span class="ds">Guarded commands need the team's profile-id</span><span class="when"></span><span class="st">IDLE</span></button>
   <button class="panel card idle" id="c2" data-layer="2"><span class="lbl">Layer 2</span><span class="nm">Heartbeat &amp; checksum</span><span class="ds">Sealed records, random checks, truth check</span><span class="when"></span><span class="st">IDLE</span></button>
@@ -106,16 +107,20 @@ button.ap:disabled{opacity:.35;cursor:default}
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const clock = (t) => new Date(t * 1000).toLocaleTimeString([], { hour12: false });
+// Every time on the page is Indian Standard Time, whatever the viewer's computer is set to.
+const IST = { hour12: false, timeZone: "Asia/Kolkata" };
+const clock = (t) => new Date(t * 1000).toLocaleTimeString("en-GB", IST);
 // Accepts an ISO string, or epoch seconds (layer events arrive as seconds; transaction events as ISO).
-const isoClock = (s) => { const d = new Date(typeof s === "number" ? s * 1000 : s); return isNaN(d) ? esc(s) : d.toLocaleTimeString([], { hour12: false }); };
+const isoClock = (s) => { const d = new Date(typeof s === "number" ? s * 1000 : s); return isNaN(d) ? esc(s) : d.toLocaleTimeString("en-GB", IST); };
 const L2_KINDS = new Set(["sequence_gap", "chain_break", "bad_signature", "unknown_key_id", "entry_edited", "entry_deleted",
   "entries_reordered", "entry_replayed", "late_entry", "challenge_mismatch", "bad_challenge_signature", "record_mismatch",
   "non_monotonic_timestamp", "silence", "missed_challenge", "bad_heartbeat", "replayed_heartbeat", "balance_misreported", "db_edited_without_log"]);
-const NAMES = { amount_paise: "amount", from_account: "from", to_account: "to", from_balance_paise: "from balance",
-  to_balance_paise: "to balance", txn_id: "txn id", timestamp: "time" };
-const SHOWN = ["txn_id", "timestamp", "from_account", "to_account", "amount_paise", "from_balance_paise", "to_balance_paise"];
-const money = (f, v) => (f.endsWith("paise") && Number.isInteger(v) ? (v / 100).toFixed(2) : v ?? "—");
+// The fields the witness records for every banking transaction. The amount is kept in minor units.
+const NAMES = { txn_id: "transaction", type: "type", amount_minor: "amount", event_id: "event id" };
+const SHOWN = ["txn_id", "type", "amount_minor", "event_id"];
+// The reconciliation names the changed field "amount"; the copies carry it as amount_minor.
+const fieldKey = (k) => (k === "amount" ? "amount_minor" : k);
+const money = (f, v) => (f === "amount_minor" && Number.isInteger(v) ? (v / 100).toFixed(2) : v ?? "—");
 
 let S = null, alerts = [], events = [], mism = [], acts = [], lastAct = 0, offset = 0;
 let view = 0, pinned = false, prevCaught = { 1: 0, 2: 0, 3: 0 };
@@ -184,7 +189,7 @@ function screen2() {
   if (!mism.length) {
     return `<h2>Layer 2 · Heartbeat &amp; checksum</h2><p class="sub">${others.length ? "Tampering detected" : "Every record checked so far matches the sealed copy"}</p>${otherList}`;
   }
-  const m = mism[0], w = m.witness_copy || {}, f = m.server_copy || {}, changed = new Set(m.fields);
+  const m = mism[0], w = m.witness_copy || {}, f = m.server_copy || {}, changed = new Set(m.fields.map(fieldKey));
   const rows = m.server_copy === null
     ? `<div class="f">record</div><div>${esc(w.txn_id)} …</div><div class="bad">missing on server</div>`
     : SHOWN.map((k) => `<div class="f">${NAMES[k] || k}</div><div>${esc(money(k, w[k]))}</div><div class="${changed.has(k) ? "bad" : ""}">${esc(money(k, f[k]))}${changed.has(k) ? " ←" : ""}</div>`).join("");
@@ -192,7 +197,7 @@ function screen2() {
   return `<div class="rec-head"><h2>Record #${m.seq}</h2><span class="t">Caught by ${esc(m.caught_by.replace(/ \(c-[0-9a-f]+\)/, ""))} at ${clock(m.caught_time)}</span></div>
   <div class="cmp"><div class="h">Field</div><div class="h">Expected (witness copy)</div><div class="h">Found on server</div>${rows}</div>
   <div class="hash"><span>hash</span><span>${esc((m.witness_hash || "").slice(0, 12))}…</span><span>${m.server_hash ? esc(m.server_hash.slice(0, 12)) + "…" : "—"}</span></div>
-  ${rest.length ? `<div class="more"><h3>Also tampered (found in the sweep)</h3><ul>${rest.map((x) => `<li>#${x.seq} · ${esc(x.fields.map((k) => NAMES[k] || k).join(", "))}: ${x.server_copy ? x.fields.map((k) => esc(money(k, x.witness_copy[k])) + " → " + esc(money(k, x.server_copy[k]))).join(", ") : "missing on server"}</li>`).join("")}</ul></div>` : ""}
+  ${rest.length ? `<div class="more"><h3>Also tampered (found in the sweep)</h3><ul>${rest.map((x) => `<li>#${x.seq} · ${esc(x.fields.length ? x.fields.map((k) => NAMES[fieldKey(k)] || k).join(", ") : "record")}: ${x.server_copy ? x.fields.map((k) => { const key = fieldKey(k); return esc(money(key, x.witness_copy[key])) + " → " + esc(money(key, x.server_copy[key])); }).join(", ") : "missing on server"}</li>`).join("")}</ul></div>` : ""}
   ${otherList}`;
 }
 

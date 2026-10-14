@@ -41,7 +41,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "layer3"))
 import l3_config_guard as config_guard  # noqa: E402
@@ -69,8 +69,12 @@ RESTORE_SCRIPT = os.environ.get("RESTORE_SCRIPT", "/opt/chain-of-custody/deploy/
 WRAPPED_COMMANDS = ["nano", "vi", "vim", "sed", "rm", "mv", "cp", "truncate", "shred", "tee"]
 
 
+# Every time the monitor prints is Indian Standard Time, whatever the server's time zone is.
+IST = timezone(timedelta(hours=5, minutes=30), "IST")
+
+
 def log(message):
-    print(f"{datetime.now().strftime('%H:%M:%S')} {message}", flush=True)
+    print(f"{datetime.now(IST).strftime('%H:%M:%S')} {message}", flush=True)
 
 
 def clip(text, limit=SNAPSHOT_LIMIT):

@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WitnessStore } from './store.js';
-import { startBankReconciliation } from './reconcile.js';
+import { startBankReconciliation, startChallenges } from './reconcile.js';
 
 const port = Number(process.env.WITNESS_PORT || 8787);
 const bindHost = process.env.WITNESS_BIND_HOST || '127.0.0.1';
@@ -591,6 +591,7 @@ const start = async () => {
   }
   const server = createWitnessServer(store);
   startBankReconciliation(store);
+  startChallenges(store);
   setInterval(() => {
     checkHeartbeatSilence(store).catch((error) => console.error('Heartbeat silence check failed:', error.message));
   }, 5_000);

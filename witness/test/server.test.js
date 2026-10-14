@@ -6,7 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WitnessStore } from '../store.js';
-import { reconcileBankTransactions } from '../reconcile.js';
+import { challengeRecord, reconcileBankTransactions, runChallengeStep } from '../reconcile.js';
 
 process.env.WITNESS_NODE_ID = 'test-node';
 process.env.WITNESS_HMAC_SECRET = 'test-secret-value-with-at-least-32-characters';
@@ -369,7 +369,7 @@ test('records heartbeats and challenge entries from bank reconciliation', async 
   assert.ok(!store.recentActivity().some((item) => item.kind === 'heartbeat'), 'heartbeats come from ct105, not the reconcile pass');
 
   await reconcileBankTransactions(store, bankReturns([{ ...matching[0], amount_minor: '10000' }]));
-  assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_mismatch' && item.detail.includes('transaction #21')));
+  assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_mismatch' && item.detail.includes('record #21')));
 
   await reconcileBankTransactions(store, bankReturns(matching));
   assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_ok'));
@@ -552,5 +552,96 @@ test('shows a dry-run quarantine from ct105, releases it on two approvals, and p
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+const challengeFixture = async (name) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), `coc-witness-${name}-`));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const witnessEvent = async (id, transactionId, amountMinor = 50000) => {
+    const event = { event_id: id, transaction_id: transactionId, type: 'deposit', amount_minor: amountMinor, occurred_at: '2026-10-14T10:00:00.000Z' };
+    await store.prepare(event);
+    await store.transition(id, 'commit');
+    return event;
+  };
+  const bank = (rows) => async () => ({ ok: true, json: async () => ({ transactions: rows }) });
+  const matching = (event) => ({ transaction_id: event.transaction_id, type: event.type, amount_minor: String(event.amount_minor), event_id: event.event_id });
+  const cleanup = () => rm(directory, { recursive: true, force: true });
+  return { store, witnessEvent, bank, matching, cleanup };
+};
+
+test('a challenge draws a crest and a trough that the auditor graph can pair', async () => {
+  const { store, witnessEvent, bank, matching, cleanup } = await challengeFixture('pair');
+  try {
+    const event = await witnessEvent('11111111-1111-4111-8111-111111111111', 31);
+
+    assert.equal(await challengeRecord(store, event, bank([matching(event)])), 'ok');
+    assert.equal(await challengeRecord(store, event, bank([{ ...matching(event), amount_minor: '1' }])), 'mismatch');
+    assert.equal(await challengeRecord(store, event, async () => { throw new Error('bank unreachable'); }), 'none');
+
+    const activity = store.recentActivity();
+    const asks = activity.filter((item) => item.kind === 'challenge_issued');
+    assert.equal(asks.length, 3);
+    for (const ask of asks) {
+      assert.match(ask.detail, /^c-[0-9a-f]{8} record #31$/, 'the graph labels crests from "record #N"');
+    }
+    const answers = activity.filter((item) => item.kind === 'challenge_ok' || item.kind === 'challenge_mismatch');
+    assert.equal(answers.length, 2, 'no answer for the unreachable bank, so that crest stays unanswered');
+    for (const answer of answers) {
+      assert.ok(asks.some((ask) => ask.detail.split(' ')[0] === answer.detail.split(' ')[0]), 'an answer shares its challenge id');
+    }
+    assert.ok(answers.some((item) => item.kind === 'challenge_mismatch' && item.detail.includes('changed amount')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('challenge steps keep a crest and trough every interval and react to new transactions', async () => {
+  const { store, witnessEvent, bank, matching, cleanup } = await challengeFixture('step');
+  try {
+    const first = await witnessEvent('22222222-2222-4222-8222-222222222222', 41);
+    const options = (rows, extra = {}) => ({ fetchImpl: bank(rows), randomEveryMs: 30_000, random: () => 0, ...extra });
+    const asks = () => store.recentActivity().filter((item) => item.kind === 'challenge_issued').length;
+
+    await runChallengeStep(store, options([matching(first)], { nowMs: 1_000_000 }));
+    assert.equal(asks(), 1, 'the first step challenges one random record straight away');
+    assert.equal(store.challengedEventIds.has(first.event_id), true, 'records witnessed before start are not replayed as fresh');
+
+    await runChallengeStep(store, options([matching(first)], { nowMs: 1_010_000 }));
+    assert.equal(asks(), 1, 'nothing new and under 30 s since the last one');
+
+    await runChallengeStep(store, options([matching(first)], { nowMs: 1_031_000 }));
+    assert.equal(asks(), 2, 'a random challenge every 30 s even when idle');
+
+    // New traffic: a record witnessed now is challenged within one step, not 30 s later.
+    const second = await witnessEvent('33333333-3333-4333-8333-333333333333', 42);
+    await runChallengeStep(store, options([matching(first), matching(second)], { nowMs: 1_033_000 }));
+    const answered = store.recentActivity().filter((item) => item.kind === 'challenge_ok' && item.detail.includes('record #42'));
+    assert.equal(answered.length, 1, 'the new transaction is verified against the bank straight away');
+
+    // A bank that has not confirmed a fresh record yet is retried, then reported once it has had time.
+    const third = await witnessEvent('44444444-4444-4444-8444-444444444444', 43);
+    const before = asks();
+    await runChallengeStep(store, options([matching(first), matching(second)], { nowMs: Date.now() + 1_000, randomEveryMs: 1e15 }));
+    assert.equal(store.challengedEventIds.has(third.event_id), false, 'a missing row is retried while it settles');
+    assert.equal(asks(), before, 'and nothing is drawn for it yet');
+    await runChallengeStep(store, options([matching(first), matching(second)], { nowMs: Date.now() + 120_000, randomEveryMs: 1e15 }));
+    assert.equal(store.challengedEventIds.has(third.event_id), true);
+    assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_mismatch' && item.detail.includes('record #43') && item.detail.includes('missing')));
+  } finally {
+    await cleanup();
+  }
+});
+
+test('the verified-record line has a time to show', async () => {
+  const { store, witnessEvent, cleanup } = await challengeFixture('verified');
+  try {
+    await witnessEvent('55555555-5555-4555-8555-555555555555', 51);
+    const latest = store.latestCommittedEvent();
+    assert.equal(typeof latest.updated_at, 'string');
+    assert.equal(Number.isNaN(Date.parse(latest.updated_at)), false);
+  } finally {
+    await cleanup();
   }
 });

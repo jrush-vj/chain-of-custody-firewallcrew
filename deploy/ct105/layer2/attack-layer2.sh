@@ -14,6 +14,8 @@
 #   bash /opt/chain-of-custody/deploy/ct105/layer2/attack-layer2.sh
 set -uo pipefail
 
+ist() { date -u -d '5 hours 30 minutes' +%H:%M:%S; }   # Indian Standard Time, whatever the server's time zone is
+
 if [ "${COC_SKIP_HOST_CHECK:-0}" != 1 ] && [ "$(hostname)" != ct105-ai ]; then
   echo "WRONG HOST: $(hostname)"; exit 1
 fi
@@ -49,7 +51,7 @@ wait_for() {
   local want="$1" id="$2" deadline=$((SECONDS + poll_limit)) seen
   while [ "$SECONDS" -lt "$deadline" ]; do
     seen="$(witness_mismatches)"
-    printf '%s  witness mismatches: %s\n' "$(date +%H:%M:%S)" "${seen:-none}"
+    printf '%s  witness mismatches: %s\n' "$(ist)" "${seen:-none}"
     if [ "$want" = tampered ] && [[ ",$seen," == *",$id,"* ]]; then return 0; fi
     if [ "$want" = clear ] && [ "$seen" != ERROR ] && [[ ",$seen," != *",$id,"* ]]; then return 0; fi
     sleep 5
@@ -76,7 +78,7 @@ restore_now() {
   local back
   back="$(psql_q "$RESTORE_SQL")"
   if [ -n "$back" ]; then
-    echo "$(date +%H:%M:%S) restored transaction #$RESTORE_ID"
+    echo "$(ist) restored transaction #$RESTORE_ID"
   else
     echo "RESTORE FAILED for #$RESTORE_ID; run scripts/restore-layer2.sh or this by hand: $RESTORE_SQL"
   fi
@@ -85,7 +87,7 @@ restore_now() {
 # run_case <label> <id> <field> <old> <new> <apply SQL> <restore SQL>
 run_case() {
   local label="$1" id="$2" field="$3" old="$4" new="$5" apply_sql="$6" restore_sql="$7" applied
-  echo; echo "$(date +%H:%M:%S) ATTACK: $label on transaction #$id"
+  echo; echo "$(ist) ATTACK: $label on transaction #$id"
   printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%FT%TZ)" "$id" "$field" "$old" "$new" >> "$journal"
   applied="$(psql_q "$apply_sql")"
   if [ -z "$applied" ]; then
@@ -93,7 +95,7 @@ run_case() {
   fi
   RESTORE_SQL="$restore_sql"; RESTORE_ID="$id"
   trap restore_now EXIT   # from here on, any exit restores the row
-  echo "$(date +%H:%M:%S) changed #$id; waiting for the witness (up to ${poll_limit}s)"
+  echo "$(ist) changed #$id; waiting for the witness (up to ${poll_limit}s)"
   if ! wait_for tampered "$id"; then
     echo "RESULT: FAIL $label - the witness did not report #$id"
     trap - EXIT; restore_now; return 1

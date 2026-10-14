@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { chmod, mkdir, open, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -22,6 +22,9 @@ export class WitnessStore {
     this.lastHeartbeatSeq = 0;
     this.lastContactAt = null;         // ms; any signed request from ct105 counts as contact
     this.holderApprovals = new Set();  // key holders who approved the current quarantine (indexes)
+    this.challengedEventIds = new Set(); // committed records already shown as a challenge on the graph
+    this.challengeBaselineSet = false;
+    this.lastRandomChallengeAt = 0;
     this.restoreRequest = null;        // one pending website restore, picked up by ct105
     this.lastRestoreRequestAt = 0;     // rate limit: one request per minute
     this.queue = Promise.resolve();
@@ -280,7 +283,32 @@ export class WitnessStore {
     const latest = [...this.events.entries()]
       .reverse()
       .find(([, item]) => item.state === 'committed');
-    return latest ? { ...latest[1].event, event_id: latest[0], state: latest[1].state } : null;
+    return latest
+      ? { ...latest[1].event, event_id: latest[0], state: latest[1].state, updated_at: latest[1].updated_at }
+      : null;
+  }
+
+  // Committed records with the time they were committed, oldest first.
+  committedRecords() {
+    if (this.integrityError) {
+      return [];
+    }
+    return [...this.events.entries()]
+      .filter(([, item]) => item.state === 'committed')
+      .map(([eventId, item]) => ({ event: { ...item.event, event_id: eventId }, committed_at: item.updated_at }));
+  }
+
+  // One check of a record against the bank, as the auditor graph draws it: a crest when the witness
+  // asks, then a trough when the bank answers. result is 'ok', 'mismatch', or 'none' (no answer).
+  recordChallenge(transactionId, result, text = '') {
+    const id = `c-${randomBytes(4).toString('hex')}`;
+    this.pushActivity('challenge_issued', `${id} record #${transactionId}`);
+    if (result === 'ok') {
+      this.pushActivity('challenge_ok', `${id} record #${transactionId} ${text}`.trim());
+    } else if (result === 'mismatch') {
+      this.pushActivity('challenge_mismatch', `${id} record #${transactionId} ${text}`.trim());
+    }
+    return id;
   }
 
   setReconciliation(result) {

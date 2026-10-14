@@ -13,6 +13,8 @@
 #   bash /opt/chain-of-custody/deploy/ct105/layer1/attack-layer1.sh
 set -uo pipefail
 
+ist() { date -u -d '5 hours 30 minutes' +%H:%M:%S; }   # Indian Standard Time, whatever the server's time zone is
+
 if [ "${COC_SKIP_HOST_CHECK:-0}" != 1 ] && [ "$(hostname)" != ct105-ai ]; then
   echo "WRONG HOST: $(hostname)"; exit 1
 fi
@@ -39,11 +41,11 @@ cp -p "$log_file" "$backup"
 restore() {
   cat "$backup" > "$log_file"
   rm -f "$backup"
-  echo "$(date +%H:%M:%S) restored $log_file from the backup taken before the attacks"
+  echo "$(ist) restored $log_file from the backup taken before the attacks"
 }
 trap restore EXIT
 
-step() { echo; echo "$(date +%H:%M:%S) ATTACK $1: $2"; }
+step() { echo; echo "$(ist) ATTACK $1: $2"; }
 
 step 1 "rewrite a line in place: sed -i"
 sed -i 's/txn 2 ok/txn 2 ok (edited by attacker)/' "$log_file"
@@ -62,7 +64,7 @@ rm -f "$log_file"
 sleep "$pause_s"
 
 echo
-echo "$(date +%H:%M:%S) attacks done; restoring the original content"
+echo "$(ist) attacks done; restoring the original content"
 trap - EXIT
 restore
 sleep "$pause_s"

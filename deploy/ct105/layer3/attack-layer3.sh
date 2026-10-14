@@ -19,6 +19,8 @@
 #   bash /opt/chain-of-custody/deploy/ct105/layer3/attack-layer3.sh [config|cut]
 set -uo pipefail
 
+ist() { date -u -d '5 hours 30 minutes' +%H:%M:%S; }   # Indian Standard Time, whatever the server's time zone is
+
 if [ "${COC_SKIP_HOST_CHECK:-0}" != 1 ] && [ "$(hostname)" != ct105-ai ]; then
   echo "WRONG HOST: $(hostname)"; exit 1
 fi
@@ -46,7 +48,7 @@ wait_for_quarantine() {
   local want="$1" limit="$2" deadline=$((SECONDS + limit)) seen
   while [ "$SECONDS" -lt "$deadline" ]; do
     seen="$(quarantine_state)"
-    printf '%s  witness quarantine: %s\n' "$(date +%H:%M:%S)" "$seen"
+    printf '%s  witness quarantine: %s\n' "$(ist)" "$seen"
     if [ "$want" = confirmed ] && [ "$seen" = "active confirmed" ]; then return 0; fi
     if [ "$want" = any ] && [[ "$seen" == active* ]]; then return 0; fi
     sleep 5
@@ -68,15 +70,15 @@ case "$mode" in
     cp -p "$env_file" "$state_dir/env.before-attack"; chmod 600 "$state_dir/env.before-attack"
 
     restore_all() {
-      echo; echo "$(date +%H:%M:%S) restoring the approved witness link settings"
+      echo; echo "$(ist) restoring the approved witness link settings"
       bash "$here/restore-config.sh"
     }
     trap restore_all EXIT
 
-    echo "$(date +%H:%M:%S) ATTACK: change WITNESS_URL in $env_file and recreate the backend"
+    echo "$(ist) ATTACK: change WITNESS_URL in $env_file and recreate the backend"
     sed -i 's|^WITNESS_URL=.*|WITNESS_URL=https://witness-unreachable.invalid|' "$env_file"
     ( cd "$app_dir" && docker compose up -d --no-deps backend ) || { echo "could not recreate the backend"; exit 1; }
-    echo "$(date +%H:%M:%S) the bank can no longer reach the witness; waiting for Layer 3 (up to 90 s)"
+    echo "$(ist) the bank can no longer reach the witness; waiting for Layer 3 (up to 90 s)"
 
     if wait_for_quarantine confirmed 90; then
       echo "RESULT: Layer 3 reported the compromise and recorded its dry-run response"
@@ -86,14 +88,14 @@ case "$mode" in
     fi
 
     if [ "${HOLD:-}" = button ]; then
-      echo "$(date +%H:%M:%S) holding: click 'Restore to normal' on the website (giving up in 15 minutes)"
+      echo "$(ist) holding: click 'Restore to normal' on the website (giving up in 15 minutes)"
       deadline=$((SECONDS + 900))
       while [ "$SECONDS" -lt "$deadline" ]; do
         python3 "$here/l3_config_guard.py" status >/dev/null 2>&1 && break
         sleep 5
       done
     else
-      echo "$(date +%H:%M:%S) holding for ${hold_s}s so the page can be shown"
+      echo "$(ist) holding for ${hold_s}s so the page can be shown"
       sleep "$hold_s"
     fi
 
@@ -111,15 +113,15 @@ case "$mode" in
   cut)
     mkdir -p "$(dirname "$cut_flag")"
     trap 'rm -f "$cut_flag"' EXIT
-    echo "$(date +%H:%M:%S) ATTACK: simulate a network cut for ${cut_s}s (flag file $cut_flag)"
+    echo "$(ist) ATTACK: simulate a network cut for ${cut_s}s (flag file $cut_flag)"
     : > "$cut_flag"
     deadline=$((SECONDS + cut_s))
     while [ "$SECONDS" -lt "$deadline" ]; do
-      printf '%s  witness quarantine: %s\n' "$(date +%H:%M:%S)" "$(quarantine_state)"
+      printf '%s  witness quarantine: %s\n' "$(ist)" "$(quarantine_state)"
       sleep 10
     done
     rm -f "$cut_flag"; trap - EXIT
-    echo "$(date +%H:%M:%S) link back; the monitor reports what it recorded while cut off"
+    echo "$(ist) link back; the monitor reports what it recorded while cut off"
     if wait_for_quarantine confirmed 60; then
       echo "RESULT: PASS - the server confirmed its dry-run quarantine after reconnecting."
       echo "The witness still shows it until two key holders approve, or 'Restore to normal' is clicked."
