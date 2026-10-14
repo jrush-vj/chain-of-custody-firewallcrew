@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,131 +12,7 @@ const nodeId = process.env.WITNESS_NODE_ID || '';
 const hmacSecret = process.env.WITNESS_HMAC_SECRET || '';
 const dataPath = process.env.WITNESS_DATA_PATH || '/var/lib/banking-witness/ledger.jsonl';
 const maxBodyBytes = 16 * 1024;
-
-const html = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Banking Witness</title>
-  <style>
-    body{font:16px system-ui,sans-serif;background:#0b1020;color:#e8edf8;margin:0;padding:2rem}
-    main{max-width:1100px;margin:auto}h1{margin-bottom:.25rem}
-    .muted{color:#9eabc4}.card{background:#151d32;border:1px solid #2c3854;border-radius:12px;padding:1rem;margin:1rem 0}
-    .status{font-weight:700}.ok{color:#5ee0a0}.bad{color:#ff7885}.warn{color:#ffd166}
-    table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.7rem;border-bottom:1px solid #2c3854}
-    code{word-break:break-all}
-  </style>
-</head>
-<body><main>
-  <h1>Banking Witness</h1>
-  <div class="muted">Independent transaction evidence receiver</div>
-  <section class="card" id="status">Loading witness status…</section>
-  <section class="card" id="reconciliation">Checking bank transaction records…</section>
-  <section class="card"><h2>Recent events</h2><div id="events">Loading…</div></section>
-  <script>
-    const escapeText = (value) => String(value ?? '');
-    async function refresh() {
-      const [statusResponse, eventsResponse] = await Promise.all([
-        fetch('/v1/status', {cache:'no-store'}),
-        fetch('/v1/events', {cache:'no-store'})
-      ]);
-      if (!statusResponse.ok || !eventsResponse.ok) throw new Error('Witness status request failed');
-      const status = await statusResponse.json();
-      const events = await eventsResponse.json();
-      const statusNode = document.getElementById('status');
-      statusNode.replaceChildren();
-      const heading = document.createElement('div');
-      heading.className = 'status ' + (status.healthy ? 'ok' : 'bad');
-      heading.textContent = status.healthy ? 'Ledger integrity: OK' : 'LEDGER INTEGRITY FAILURE';
-      statusNode.append(heading);
-      if (status.integrity_error) {
-        const alert = document.createElement('p');
-        alert.textContent = status.integrity_error;
-        statusNode.append(alert);
-      }
-      const summary = document.createElement('p');
-      summary.textContent = 'Records: ' + status.record_count + ' · Latest sequence: ' + status.latest_seq + ' · Prepared events: ' + status.prepared_count;
-      statusNode.append(summary);
-      const hash = document.createElement('code');
-      hash.textContent = status.latest_hash;
-      statusNode.append(hash);
-
-      const reconciliationNode = document.getElementById('reconciliation');
-      reconciliationNode.replaceChildren();
-      const reconciliation = status.bank_reconciliation;
-      const reconciliationHeading = document.createElement('div');
-      reconciliationHeading.className = 'status ' + (
-        reconciliation.state === 'ok' ? 'ok' :
-          reconciliation.state === 'mismatch' ? 'bad' : 'warn'
-      );
-      reconciliationHeading.textContent = reconciliation.state === 'ok'
-        ? 'Bank records match witnessed transactions'
-        : reconciliation.state === 'mismatch'
-          ? 'BANK TRANSACTION TAMPERING DETECTED'
-          : reconciliation.state === 'unavailable'
-            ? 'Bank records could not be checked'
-            : 'Checking bank records…';
-      reconciliationNode.append(reconciliationHeading);
-      const reconciliationSummary = document.createElement('p');
-      reconciliationSummary.textContent =
-        'Witnessed transactions checked: ' + reconciliation.checked_transactions +
-        (reconciliation.checked_at ? ' · Last check: ' + reconciliation.checked_at : '');
-      reconciliationNode.append(reconciliationSummary);
-      if (reconciliation.state === 'unavailable') {
-        const unavailable = document.createElement('p');
-        unavailable.textContent = 'Bank source is unavailable; this is not proof of tampering.';
-        reconciliationNode.append(unavailable);
-      }
-      for (const mismatch of reconciliation.mismatches || []) {
-        const item = document.createElement('p');
-        const witnessedAmount = (mismatch.witnessed_amount_minor / 100).toFixed(2);
-        const bankAmount = Number.isSafeInteger(mismatch.bank_amount_minor)
-          ? (mismatch.bank_amount_minor / 100).toFixed(2)
-          : 'missing';
-        item.textContent = 'Transaction ' + mismatch.transaction_id + ': ' + mismatch.issue +
-          '; witnessed $' + witnessedAmount + ', bank record $' + bankAmount;
-        reconciliationNode.append(item);
-      }
-
-      const container = document.getElementById('events');
-      container.replaceChildren();
-      if (!events.length) {
-        container.textContent = 'No transaction events received yet.';
-        return;
-      }
-      const table = document.createElement('table');
-      const header = document.createElement('tr');
-      for (const label of ['Seq', 'Transaction', 'Type', 'Amount', 'State', 'Recorded']) {
-        const cell = document.createElement('th');
-        cell.textContent = label;
-        header.append(cell);
-      }
-      table.append(header);
-      for (const event of events) {
-        const row = document.createElement('tr');
-        for (const value of [
-          event.prepare_seq,
-          event.transaction_id,
-          event.type,
-          (event.amount_minor / 100).toFixed(2),
-          event.state,
-          event.updated_at
-        ]) {
-          const cell = document.createElement('td');
-          cell.textContent = escapeText(value);
-          row.append(cell);
-        }
-        table.append(row);
-      }
-      container.append(table);
-    }
-    refresh().catch((error) => {
-      document.getElementById('status').textContent = 'Unable to load witness status: ' + error.message;
-    });
-    setInterval(() => refresh().catch(() => {}), 3000);
-  </script>
-</main></body></html>`;
+const html = readFileSync(new URL('./auditor.html', import.meta.url), 'utf8');
 
 const readBody = async (request) => {
   const chunks = [];

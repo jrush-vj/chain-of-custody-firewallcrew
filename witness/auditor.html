@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Chain of Custody · Witness</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0a0e13;
+      --panel: #111821;
+      --panel-raised: #16202b;
+      --line: #223041;
+      --text: #e3eaf2;
+      --muted: #8394a8;
+      --green: #34d399;
+      --green-bg: #0f2c22;
+      --red: #ff5c5c;
+      --red-bg: #3a1416;
+      --amber: #fbbf24;
+      --blue: #6aa8ff;
+      --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      --sans: "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 var(--sans); }
+    .app { min-height: 100vh; display: grid; gap: 12px; padding: 12px 16px;
+      grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: auto auto minmax(240px, 1fr) auto;
+      grid-template-areas: "top top" "main l1" "main l2" "feed l3"; }
+    .top { grid-area: top; display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    h1 { margin: 0; font-size: 20px; letter-spacing: .02em; }
+    h1 span { color: var(--muted); font-weight: 400; }
+    .conn, .pill { font: 700 12px var(--mono); letter-spacing: .05em; padding: 5px 10px;
+      border: 1px solid var(--line); border-radius: 999px; color: var(--muted); white-space: nowrap; }
+    .conn.live, .pill.ok { background: var(--green-bg); color: var(--green); border-color: #1d5a42; }
+    .conn.lost, .pill.bad { background: var(--red-bg); color: var(--red); border-color: var(--red); }
+    .pill.warn { background: #302710; color: var(--amber); border-color: #65511d; }
+    .panel, .layer { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+    .main { grid-area: main; padding: 20px 22px; overflow: auto; }
+    .eyebrow { color: var(--muted); font: 600 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    h2 { margin: 3px 0; font-size: 27px; line-height: 1.2; }
+    h3 { margin: 0; font-size: 16px; }
+    .sub { margin: 0; color: var(--muted); }
+    .banner { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--panel-raised); }
+    .banner.bad { background: var(--red-bg); border-color: #732a2c; }
+    .banner.warn { background: #302710; border-color: #65511d; }
+    .banner strong { display: block; font: 700 15px var(--mono); }
+    .banner p { margin: 4px 0 0; color: var(--muted); }
+    .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+    .stat { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-raised); }
+    .stat .k { color: var(--muted); font-size: 12px; }
+    .stat .v { margin-top: 4px; font: 700 22px var(--mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .section { margin-top: 16px; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .section-head small { color: var(--muted); font: 12px var(--mono); }
+    .reconciliation { display: grid; gap: 8px; }
+    .mismatch { padding: 10px 12px; border-left: 3px solid var(--red); background: var(--red-bg); overflow-wrap: anywhere; }
+    .mismatch strong { color: #ffd7d7; }
+    .layer { padding: 14px 16px; display: flex; flex-direction: column; gap: 5px; }
+    #l1 { grid-area: l1; } #l2 { grid-area: l2; } #l3 { grid-area: l3; }
+    .layer .lbl { color: var(--muted); font: 600 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    .layer .name { font-size: 17px; font-weight: 700; }
+    .layer .desc { color: var(--muted); font-size: 13px; }
+    .layer .state { margin-top: auto; font: 700 12px var(--mono); letter-spacing: .04em; color: var(--muted); }
+    .layer.passed { border-color: #1d5a42; } .layer.passed .state { color: var(--green); }
+    .layer.caught { border-color: var(--red); background: linear-gradient(180deg, var(--red-bg), var(--panel) 80%); }
+    .layer.caught .state { color: var(--red); }
+    .layer.checking { border-color: #65511d; } .layer.checking .state { color: var(--amber); }
+    .feed { grid-area: feed; padding: 14px 16px; min-width: 0; }
+    .event-strip { display: flex; align-items: end; gap: 4px; height: 64px; padding: 8px 0 0; overflow: hidden; }
+    .event-bar { flex: 1 0 5px; max-width: 18px; min-height: 4px; border-radius: 2px 2px 0 0; background: var(--green); }
+    .event-bar.prepared { background: var(--amber); } .event-bar.aborted { background: var(--red); }
+    .legend { margin-top: 5px; color: var(--muted); font: 11px var(--mono); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font: 600 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    td.m { font-family: var(--mono); white-space: nowrap; }
+    .empty { color: var(--muted); font-style: italic; }
+    .hash { color: var(--muted); font: 11px var(--mono); overflow-wrap: anywhere; }
+    .note { margin-top: 14px; color: var(--muted); font-size: 12px; }
+    @media (max-width: 980px) {
+      .app { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto auto auto;
+        grid-template-areas: "top top" "main main" "l1 l2" "l3 l3" "feed feed"; }
+      .main { min-height: 540px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 620px) {
+      .app { grid-template-columns: 1fr; grid-template-areas: "top" "l1" "l2" "l3" "main" "feed"; padding: 10px; }
+      .top { align-items: flex-start; } h1 { font-size: 17px; }
+      .main { min-height: 0; padding: 16px; }
+      h2 { font-size: 23px; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <h1>Chain of Custody · Witness <span>auditor view</span></h1>
+      <span class="conn" id="connection" role="status">CONNECTING</span>
+    </header>
+
+    <main class="panel main">
+      <div class="eyebrow">Oracle transaction witness</div>
+      <h2>Independent evidence monitor</h2>
+      <p class="sub">Hash-chained transaction evidence and bank-record reconciliation.</p>
+      <section class="banner" id="integrity">
+        <strong>Loading witness integrity…</strong>
+      </section>
+      <div class="stats" aria-label="Witness ledger summary">
+        <div class="stat"><div class="k">Ledger records</div><div class="v" id="record-count">—</div></div>
+        <div class="stat"><div class="k">Latest sequence</div><div class="v" id="latest-seq">—</div></div>
+        <div class="stat"><div class="k">Prepared events</div><div class="v" id="prepared-count">—</div></div>
+        <div class="stat"><div class="k">Latest record hash</div><div class="v hash" id="latest-hash">—</div></div>
+      </div>
+      <section class="section" aria-labelledby="reconciliation-title">
+        <div class="section-head">
+          <h3 id="reconciliation-title">Bank reconciliation</h3>
+          <span class="pill warn" id="reconciliation-state">CHECKING</span>
+        </div>
+        <div class="reconciliation" id="reconciliation" aria-live="polite">
+          <p class="empty">Waiting for the first bank check.</p>
+        </div>
+      </section>
+      <section class="section" aria-labelledby="events-title">
+        <div class="section-head">
+          <h3 id="events-title">Recent transaction evidence</h3>
+          <small id="updated-at">Waiting for data</small>
+        </div>
+        <div class="table-wrap" id="events" aria-live="polite">
+          <p class="empty">Loading witnessed events…</p>
+        </div>
+      </section>
+      <p class="note">Layer 1 command tripwire and Layer 3 quarantine are not connected to this banking witness.</p>
+    </main>
+
+    <section class="layer" id="l1" aria-label="Layer 1 command tripwire not integrated">
+      <div class="lbl">Layer 1</div><div class="name">Command tripwire</div>
+      <div class="desc">Cybersec agent events are not connected to this service.</div>
+      <div class="state">NOT INTEGRATED</div>
+    </section>
+    <section class="layer checking" id="l2" aria-label="Layer 2 transaction witness status">
+      <div class="lbl">Layer 2</div><div class="name">Banking witness</div>
+      <div class="desc">Ledger integrity and transaction reconciliation.</div>
+      <div class="state" id="layer-two-state">CHECKING</div>
+    </section>
+    <section class="layer" id="l3" aria-label="Layer 3 quarantine not integrated">
+      <div class="lbl">Layer 3</div><div class="name">Quarantine</div>
+      <div class="desc">Cybersec quarantine controls are not connected to this service.</div>
+      <div class="state">NOT INTEGRATED</div>
+    </section>
+
+    <section class="panel feed" aria-labelledby="monitor-title">
+      <div class="section-head">
+        <h3 id="monitor-title">Recent witness activity</h3>
+        <small>Latest 50 events · oldest to newest</small>
+      </div>
+      <div class="event-strip" id="event-strip" role="img" aria-label="No transaction activity yet"></div>
+      <div class="legend">COMMITTED · PREPARED · ABORTED</div>
+    </section>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const money = (minor) => Number.isSafeInteger(minor) ? '$' + (minor / 100).toFixed(2) : '—';
+    const date = (value) => {
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? '—' : parsed.toLocaleString();
+    };
+    const node = (tag, value, className) => {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      element.textContent = value;
+      return element;
+    };
+    const setLayerTwo = (state, text) => {
+      $('l2').className = 'layer ' + state;
+      $('layer-two-state').textContent = text;
+    };
+    function renderIntegrity(status) {
+      const banner = $('integrity');
+      banner.replaceChildren();
+      banner.className = 'banner ' + (status.healthy ? '' : 'bad');
+      banner.append(node('strong', status.healthy ? 'Ledger integrity verified' : 'LEDGER INTEGRITY FAILURE'));
+      if (!status.healthy) {
+        banner.append(node('p', status.integrity_error || 'Witness writes are disabled.'));
+      } else {
+        banner.append(node('p', 'The witness verified the append-only ledger at startup.'));
+      }
+      $('record-count').textContent = status.record_count;
+      $('latest-seq').textContent = status.latest_seq;
+      $('prepared-count').textContent = status.prepared_count;
+      $('latest-hash').textContent = status.latest_hash.slice(0, 12) + '…';
+      $('latest-hash').title = status.latest_hash;
+      $('latest-hash').setAttribute('aria-label', 'Latest record hash ' + status.latest_hash);
+    }
+    function renderReconciliation(reconciliation) {
+      const container = $('reconciliation');
+      container.replaceChildren();
+      const labels = {
+        ok: ['ok', 'MATCH'],
+        mismatch: ['bad', 'MISMATCH'],
+        unavailable: ['warn', 'SOURCE UNAVAILABLE'],
+        checking: ['warn', 'CHECKING']
+      };
+      const [state, label] = labels[reconciliation.state] || labels.checking;
+      $('reconciliation-state').className = 'pill ' + state;
+      $('reconciliation-state').textContent = label;
+      container.append(node('p',
+        'Witnessed transactions checked: ' + reconciliation.checked_transactions +
+        (reconciliation.checked_at ? ' · Last check: ' + date(reconciliation.checked_at) : ''),
+        'sub'));
+      if (reconciliation.state === 'unavailable') {
+        container.append(node('p', 'The bank source could not be checked; an outage is not proof of tampering.', 'empty'));
+        if (reconciliation.mismatches && reconciliation.mismatches.length) {
+          container.append(node('p', 'Mismatch details below are from the last successful bank check.', 'empty'));
+        }
+      }
+      for (const mismatch of reconciliation.mismatches || []) {
+        const item = node('div', '', 'mismatch');
+        item.append(node('strong', 'Transaction ' + mismatch.transaction_id + ': ' + mismatch.issue));
+        const bankAmount = Number.isSafeInteger(mismatch.bank_amount_minor)
+          ? money(mismatch.bank_amount_minor) : 'missing';
+        item.append(node('div',
+          'Witness recorded ' + money(mismatch.witnessed_amount_minor) +
+          ' (' + (mismatch.witnessed_type || 'unknown type') + '); bank reports ' +
+          bankAmount + (mismatch.bank_type ? ' (' + mismatch.bank_type + ')' : '') + '.'));
+        container.append(item);
+      }
+      if (reconciliation.state === 'ok') {
+        container.append(node('p', 'Bank records match the committed witnessed transactions.', 'sub'));
+      }
+      if (!['ok', 'mismatch', 'unavailable'].includes(reconciliation.state)) {
+        container.append(node('p', 'The first reconciliation request is in progress.', 'empty'));
+      }
+    }
+    function renderEvents(events) {
+      const container = $('events');
+      container.replaceChildren();
+      if (!events.length) {
+        container.append(node('p', 'No transaction events received yet.', 'empty'));
+      } else {
+        const table = document.createElement('table');
+        const head = document.createElement('thead');
+        const headings = document.createElement('tr');
+        for (const label of ['Seq', 'Transaction', 'Type', 'Amount', 'State', 'Recorded']) {
+          headings.append(node('th', label));
+        }
+        head.append(headings);
+        const body = document.createElement('tbody');
+        for (const event of events) {
+          const row = document.createElement('tr');
+          for (const value of [
+            event.prepare_seq,
+            event.transaction_id,
+            event.type,
+            money(event.amount_minor),
+            event.state,
+            date(event.updated_at)
+          ]) {
+            row.append(node('td', String(value), 'm'));
+          }
+          body.append(row);
+        }
+        table.append(head, body);
+        container.append(table);
+      }
+      const strip = $('event-strip');
+      strip.replaceChildren();
+      const chronological = [...events].reverse();
+      for (const event of chronological) {
+        const bar = node('span', '');
+        bar.className = 'event-bar ' + (event.state === 'aborted' ? 'aborted' :
+          event.state === 'prepared' ? 'prepared' : '');
+        bar.title = 'Transaction ' + event.transaction_id + ': ' + event.state;
+        strip.append(bar);
+      }
+      strip.setAttribute('aria-label', chronological.length
+        ? chronological.length + ' recent transaction events; latest state ' + chronological[chronological.length - 1].state
+        : 'No transaction activity yet');
+    }
+    async function refresh() {
+      const [statusResponse, eventsResponse] = await Promise.all([
+        fetch('/v1/status', { cache: 'no-store' }),
+        fetch('/v1/events', { cache: 'no-store' })
+      ]);
+      if (!statusResponse.ok || !eventsResponse.ok) throw new Error('Witness API returned an unsuccessful response.');
+      const status = await statusResponse.json();
+      const events = await eventsResponse.json();
+      if (!status.bank_reconciliation || !Array.isArray(events)) throw new Error('Witness API returned an invalid response.');
+      $('connection').className = 'conn live';
+      $('connection').textContent = 'CONNECTED';
+      renderIntegrity(status);
+      renderReconciliation(status.bank_reconciliation);
+      renderEvents(events);
+      if (!status.healthy || status.bank_reconciliation.state === 'mismatch') {
+        setLayerTwo('caught', 'ALERT');
+      } else if (status.bank_reconciliation.state === 'unavailable') {
+        setLayerTwo('checking', 'SOURCE UNAVAILABLE');
+      } else if (status.bank_reconciliation.state === 'checking') {
+        setLayerTwo('checking', 'CHECKING');
+      } else {
+        setLayerTwo('passed', 'VERIFIED');
+      }
+      $('updated-at').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    }
+    async function poll() {
+      try {
+        await refresh();
+      } catch (error) {
+        $('connection').className = 'conn lost';
+        $('connection').textContent = 'CONNECTION ERROR';
+        $('integrity').className = 'banner warn';
+        $('integrity').replaceChildren(node('strong', 'Unable to load witness data'));
+        $('integrity').append(node('p', error.message));
+        setLayerTwo('checking', 'CONNECTION ERROR');
+      }
+    }
+    void poll();
+    setInterval(poll, 5000);
+  </script>
+</body>
+</html>

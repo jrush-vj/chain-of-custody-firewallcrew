@@ -54,6 +54,7 @@ getent passwd banking-witness >/dev/null || sudo useradd --system --home /opt/ba
 sudo install -d -o root -g root -m 0755 /opt/banking-witness
 sudo install -d -o banking-witness -g banking-witness -m 0700 /var/lib/banking-witness
 sudo install -m 0644 /opt/coc-witness-source/witness/server.js /opt/banking-witness/server.js
+sudo install -m 0644 /opt/coc-witness-source/witness/auditor.html /opt/banking-witness/auditor.html
 sudo install -m 0644 /opt/coc-witness-source/witness/store.js /opt/banking-witness/store.js
 sudo install -m 0644 /opt/coc-witness-source/witness/reconcile.js /opt/banking-witness/reconcile.js
 sudo install -m 0644 /opt/coc-witness-source/witness/package.json /opt/banking-witness/package.json
@@ -132,15 +133,46 @@ bank API continues to run normally—not guaranteed detection of a fully
 compromised host.
 
 For this reconciliation update, fast-forward the clean Oracle source checkout
-to `main`, stop the witness, install `server.js`, `store.js`, `reconcile.js`,
-and `package.json` from `/opt/coc-witness-source/witness/` into
-`/opt/banking-witness/`, then start the witness again. On ct105, fast-forward
-`/opt/chain-of-custody-firewallcrew` to `main` and rebuild only the backend and
-frontend with Compose project `banking-system`. Preserve the local
-`docker-compose.yml` mappings for ports `8081` and `3001`; do not recreate or
-delete the PostgreSQL volume. The bank endpoint is available after the updated
-backend starts. The dashboard reports source-unavailable until its first
-successful poll.
+The auditor dashboard uses the cybersec auditor layout, adapted to the banking
+witness's existing `/v1/status` and `/v1/events` APIs. It shows only status
+the Node witness actually provides. The cybersec command tripwire and
+quarantine layers are labelled not integrated; this dashboard update does not
+install or activate those controls.
+
+To update the Oracle witness from the repository's `main` branch, first check
+that the source checkout is clean. Do not discard local changes. Then run on
+Oracle:
+
+```bash
+set -e
+cd /opt/coc-witness-source
+git branch --show-current
+git status --short
+test "$(git branch --show-current)" = main
+test -z "$(git status --porcelain)"
+git pull --ff-only origin main
+sudo systemctl stop banking-witness.service
+sudo install -m 0644 /opt/coc-witness-source/witness/server.js /opt/banking-witness/server.js
+sudo install -m 0644 /opt/coc-witness-source/witness/auditor.html /opt/banking-witness/auditor.html
+sudo install -m 0644 /opt/coc-witness-source/witness/store.js /opt/banking-witness/store.js
+sudo install -m 0644 /opt/coc-witness-source/witness/reconcile.js /opt/banking-witness/reconcile.js
+sudo install -m 0644 /opt/coc-witness-source/witness/package.json /opt/banking-witness/package.json
+sudo systemctl start banking-witness.service
+sudo systemctl status banking-witness.service --no-pager
+curl --fail http://127.0.0.1:8787/health
+curl --fail https://witness.jrushvj.dev/ | grep -F 'Chain of Custody · Witness'
+```
+
+Confirm the branch is `main` and the checkout is clean before pulling. If
+`git status --short` prints changes, stop and review them; `git pull --ff-only`
+must not be replaced with a reset or forced update. No Cloudflare Tunnel
+change is needed when it already routes `witness.jrushvj.dev` to
+`127.0.0.1:8787`.
+
+On ct105, update the root checkout and its pinned cybersec submodule using the
+existing deployment service; this dashboard-only release does not require a
+banking container rebuild. Follow [`../deploy/ct105/README.md`](../deploy/ct105/README.md)
+for the safe update commands. Do not recreate or delete the PostgreSQL volume.
 
 ## Integrity and limits
 

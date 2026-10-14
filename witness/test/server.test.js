@@ -12,6 +12,31 @@ process.env.WITNESS_NODE_ID = 'test-node';
 process.env.WITNESS_HMAC_SECRET = 'test-secret-value-with-at-least-32-characters';
 const { createWitnessServer } = await import('../server.js');
 
+test('serves the cybersec auditor dashboard on the banking witness API', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-dashboard-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}`);
+    const html = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(html, /Chain of Custody · Witness/);
+    assert.match(html, /<div class="lbl">Layer 1<\/div><div class="name">Command tripwire<\/div>/);
+    assert.match(html, /<div class="lbl">Layer 2<\/div><div class="name">Banking witness<\/div>/);
+    assert.match(html, /<div class="lbl">Layer 3<\/div><div class="name">Quarantine<\/div>/);
+    assert.match(html, /\/v1\/status/);
+    assert.match(html, /\/v1\/events/);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test('accepts authenticated prepare/commit and publishes a safe event view', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-http-'));
   const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
