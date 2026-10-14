@@ -5,11 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=coc-witness
-Group=coc-witness
-EnvironmentFile=/etc/coc-witness/witness.env
-WorkingDirectory=/opt/coc-witness
-ExecStart=/usr/bin/node /opt/coc-witness/server.js
+User=banking-witness
+Group=banking-witness
+EnvironmentFile=/etc/banking-witness/witness.env
+WorkingDirectory=/opt/banking-witness
+ExecStart=/usr/bin/node /opt/banking-witness/server.js
 Restart=on-failure
 RestartSec=3
 NoNewPrivileges=true
@@ -17,7 +17,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/coc-witness
+ReadWritePaths=/var/lib/banking-witness
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictSUIDSGID=true
 LockPersonality=true

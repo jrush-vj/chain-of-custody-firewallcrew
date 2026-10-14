@@ -8,7 +8,7 @@ const port = Number(process.env.WITNESS_PORT || 8787);
 const bindHost = process.env.WITNESS_BIND_HOST || '127.0.0.1';
 const nodeId = process.env.WITNESS_NODE_ID || '';
 const hmacSecret = process.env.WITNESS_HMAC_SECRET || '';
-const dataPath = process.env.WITNESS_DATA_PATH || '/var/lib/coc-witness/ledger.jsonl';
+const dataPath = process.env.WITNESS_DATA_PATH || '/var/lib/banking-witness/ledger.jsonl';
 const maxBodyBytes = 16 * 1024;
 
 const html = `<!doctype html>
