@@ -26,6 +26,12 @@ export class WitnessStore {
     // Per witnessed transaction: when it last matched the bank, and when it first stopped matching.
     // In memory, so after a restart the window starts again from the first pass.
     this.recordHealth = new Map();
+    // Copies of the bank's transaction rows (allowlisted columns only), keyed by id, first seen version.
+    this.copies = new Map();
+    this.baselineMaxId = null;   // rows up to this id existed before copying began; later rows must be witnessed
+    this.baselineComplete = false; // true once every baseline row has been copied
+    this.bankView = null;        // the latest summary ct105 sent with a heartbeat
+    this.currentHashes = new Map(); // id -> { hash, at } as last seen in the bank, from sweeps and received rows
     this.challengeBaselineSet = false;
     this.lastRandomChallengeAt = 0;
     this.restoreRequest = null;        // one pending website restore, picked up by ct105
@@ -76,7 +82,7 @@ export class WitnessStore {
         };
         const expectedHash = recordHash(expected);
         if (
-          !['prepare', 'commit', 'abort', 'layer_event', 'layer_resolve'].includes(record.action) ||
+          !['prepare', 'commit', 'abort', 'layer_event', 'layer_resolve', 'record_copy', 'sync_baseline'].includes(record.action) ||
           record.seq !== expected.seq ||
           record.previous_hash !== expected.previous_hash ||
           record.hash !== expectedHash
@@ -92,6 +98,9 @@ export class WitnessStore {
       this.events.clear();
       this.layerEvents = [];
       this.activity = [];
+      this.copies.clear();
+      this.baselineMaxId = null;
+      this.baselineComplete = false;
       this.integrityError = error.message;
       throw error;
     }
@@ -111,7 +120,7 @@ export class WitnessStore {
   }
 
   noteActivity(record) {
-    if (record.action === 'layer_resolve') {
+    if (['layer_resolve', 'record_copy', 'sync_baseline'].includes(record.action)) {
       return;
     }
     if (record.action === 'layer_event') {
@@ -138,11 +147,23 @@ export class WitnessStore {
   }
 
   applyState(record) {
+    if (record.action === 'sync_baseline') {
+      this.baselineMaxId = record.payload.max_id;
+      if (record.payload.complete) this.baselineComplete = true;
+      return;
+    }
+    if (record.action === 'record_copy') {
+      for (const row of record.payload.rows) {
+        this.copies.set(row.id, { ...row, baseline: Boolean(record.payload.baseline), copied_at: record.recorded_at });
+      }
+      return;
+    }
     if (record.action === 'layer_resolve') {
       // Resolves the layer events recorded before it, optionally only one layer or kind; the history stays.
-      const { layer, kind } = record.payload;
+      const { layer, kind, record: recordId } = record.payload;
       for (const item of this.layerEvents) {
-        if (item.id < record.seq && (!layer || item.layer === layer) && (!kind || item.kind === kind)) {
+        if (item.id < record.seq && (!layer || item.layer === layer) && (!kind || item.kind === kind)
+            && (recordId === undefined || item.detail?.record === recordId)) {
           item.resolved = true;
         }
       }
@@ -206,6 +227,19 @@ export class WitnessStore {
 
   resolveLayerEvents(reason, scope = {}) {
     return this.enqueue(() => this.appendRecord('layer_resolve', { reason, ...scope }));
+  }
+
+  recordCopies(rows, baseline = false) {
+    return this.enqueue(() => this.appendRecord('record_copy', { rows, baseline }));
+  }
+
+  recordBaseline(maxId, complete = false) {
+    return this.enqueue(() => this.appendRecord('sync_baseline', { max_id: maxId, complete }));
+  }
+
+  // An unresolved finding about one bank row, e.g. kind 'entry_edited' for record 12.
+  openEvidence(kind, recordId) {
+    return this.layerEvents.find((item) => item.kind === kind && item.detail?.record === recordId && item.state === 'alert' && !item.resolved) || null;
   }
 
   hasOpenLayerEvent(kind) {

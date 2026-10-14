@@ -5,6 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WitnessStore } from './store.js';
 import { startBankReconciliation, startChallenges } from './reconcile.js';
+import { amountMinor } from './records.js';
+import { evaluateHeartbeat, evidenceMismatches, receiveRows, recordCounts } from './banksync.js';
 
 const port = Number(process.env.WITNESS_PORT || 8787);
 const bindHost = process.env.WITNESS_BIND_HOST || '127.0.0.1';
@@ -122,6 +124,7 @@ const auditorStatus = (store) => {
       ? 'alert'
       : reconciliation.state === 'ok' && hasVerifiedRecords ? 'normal' : 'unknown',
     quarantine: quarantineState(store),
+    records: recordCounts(store),
     bank_reconciliation: {
       state: reconciliation.state,
       checked_at: hasVerifiedRecords ? successfulCheck : null,
@@ -198,7 +201,7 @@ const auditorMismatches = (store) => {
       ? store.lastSuccessfulReconciliationAt
       : status.bank_reconciliation.checked_at
   ) || Date.now() / 1000;
-  return status.bank_reconciliation.mismatches.map((mismatch) => {
+  const reconciled = status.bank_reconciliation.mismatches.map((mismatch) => {
     const changedFields = mismatch.fields || [];
     const witnessCopy = {
       txn_id: mismatch.transaction_id,
@@ -241,6 +244,56 @@ const auditorMismatches = (store) => {
       first_seen_time: toEpochSeconds(mismatch.first_seen_at)
     };
   });
+  return mergeEvidence(store, reconciled);
+};
+
+// The bank row as the Layer 2 panel shows it. The extra columns appear only when they changed.
+const rowView = (row, eventId) => row && {
+  txn_id: row.id,
+  type: row.type,
+  amount_minor: amountMinor(row),
+  event_id: eventId,
+  status: row.status,
+  from_account_id: row.from_account_id,
+  to_account_id: row.to_account_id,
+  timestamp: row.timestamp
+};
+
+// Findings from the witness's copies of the bank rows join the four-field reconciliation, so one
+// record is one entry: a status or account change appears beside an amount change on the same record.
+const mergeEvidence = (store, reconciled) => {
+  const witnessedIds = new Map(store.committedEvents().map((event) => [event.transaction_id, event.event_id]));
+  const merged = [...reconciled];
+  for (const item of evidenceMismatches(store)) {
+    const eventId = witnessedIds.get(item.seq);
+    const unwitnessed = item.kind === 'db_edited_without_log';
+    const witnessCopy = unwitnessed ? {} : rowView(item.before, eventId) || {};
+    const serverCopy = item.kind === 'entry_deleted' ? null : rowView(item.after, eventId);
+    const fields = unwitnessed ? ['type', 'amount', 'status', 'from_account_id', 'to_account_id', 'timestamp'] : item.fields;
+    const existing = merged.find((entry) => entry.seq === item.seq);
+    if (existing) {
+      existing.fields = [...new Set([...existing.fields, ...fields])];
+      existing.witness_copy = { ...witnessCopy, ...existing.witness_copy };
+      if (existing.server_copy && serverCopy) existing.server_copy = { ...serverCopy, ...existing.server_copy };
+      continue;
+    }
+    merged.push({
+      source: 'bank_records',
+      seq: item.seq,
+      caught_time: toEpochSeconds(item.detected_at),
+      caught_by: unwitnessed ? 'record copy check (never witnessed)' : 'record copy check',
+      fields,
+      witness_copy: witnessCopy,
+      server_copy: serverCopy,
+      issue: unwitnessed ? 'unwitnessed' : item.kind === 'entry_deleted' ? 'missing' : 'changed',
+      previous_healthy: item.previous_healthy
+        ? { seq: item.previous_healthy.id, copy: rowView(item.previous_healthy, witnessedIds.get(item.previous_healthy.id)), verified_time: toEpochSeconds(item.verified_at) }
+        : null,
+      last_matched_time: null,
+      first_seen_time: toEpochSeconds(item.detected_at)
+    });
+  }
+  return merged.sort((a, b) => a.seq - b.seq);
 };
 
 const validateLayerEvent = (event) => {
@@ -490,7 +543,7 @@ export const createWitnessServer = (store) =>
       }
       if (
         request.method !== 'POST' ||
-        !['/v1/prepare', '/v1/commit', '/v1/abort', '/v1/layer-events', '/v1/heartbeat'].includes(pathname)
+        !['/v1/prepare', '/v1/commit', '/v1/abort', '/v1/layer-events', '/v1/heartbeat', '/v1/records'].includes(pathname)
       ) {
         return sendJson(response, 404, { error: 'Not found' });
       }
@@ -512,6 +565,9 @@ export const createWitnessServer = (store) =>
       }
 
       let result;
+      if (pathname === '/v1/records') {
+        return sendJson(response, 200, await receiveRows(store, payload.rows));
+      }
       if (pathname === '/v1/heartbeat') {
         // seq must rise: ct105 uses its clock in ms, so it keeps rising across monitor restarts.
         if (!Number.isSafeInteger(payload.seq) || payload.seq <= 0) {
@@ -527,7 +583,17 @@ export const createWitnessServer = (store) =>
         if (store.hasOpenLayerEvent('silence')) {
           await store.resolveLayerEvents('heartbeat resumed', { layer: 2, kind: 'silence' });
         }
-        return sendJson(response, 200, { status: 'ok', interval_s: heartbeatIntervalS });
+        // A heartbeat may carry a view of the bank's rows. A bad view must not undo the heartbeat itself.
+        const reply = { status: 'ok', interval_s: heartbeatIntervalS };
+        if (payload.bank !== undefined) {
+          try {
+            reply.sync = await evaluateHeartbeat(store, payload.bank);
+          } catch (error) {
+            if (!error.statusCode) throw error;
+            reply.sync_error = error.message;
+          }
+        }
+        return sendJson(response, 200, reply);
       }
       if (pathname === '/v1/layer-events') {
         validateLayerEvent(payload);
