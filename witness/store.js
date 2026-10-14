@@ -66,7 +66,7 @@ export class WitnessStore {
         };
         const expectedHash = recordHash(expected);
         if (
-          !['prepare', 'commit', 'abort', 'layer_event'].includes(record.action) ||
+          !['prepare', 'commit', 'abort', 'layer_event', 'layer_resolve'].includes(record.action) ||
           record.seq !== expected.seq ||
           record.previous_hash !== expected.previous_hash ||
           record.hash !== expectedHash
@@ -101,6 +101,9 @@ export class WitnessStore {
   }
 
   noteActivity(record) {
+    if (record.action === 'layer_resolve') {
+      return;
+    }
     if (record.action === 'layer_event') {
       this.pushActivity(`layer${record.payload.layer}_${record.payload.trigger}`, record.payload.summary, record.recorded_at);
       return;
@@ -125,6 +128,13 @@ export class WitnessStore {
   }
 
   applyState(record) {
+    if (record.action === 'layer_resolve') {
+      // A completed restore resolves every Layer 1 alert recorded before it; the history stays.
+      for (const item of this.layerEvents) {
+        if (item.id < record.seq) item.resolved = true;
+      }
+      return;
+    }
     if (record.action === 'layer_event') {
       this.layerEvents.push({ id: record.seq, ...record.payload, recorded_at: record.recorded_at });
       return;
@@ -179,6 +189,10 @@ export class WitnessStore {
     this.applyRecord(entry);
     this.records.push(entry);
     return entry;
+  }
+
+  resolveLayerEvents(reason) {
+    return this.enqueue(() => this.appendRecord('layer_resolve', { reason }));
   }
 
   recordLayerEvent(payload) {

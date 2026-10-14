@@ -124,7 +124,7 @@ const auditorAlerts = (store) => {
     });
   }
   for (const record of store.recentLayerEvents()) {
-    if (record.state !== 'alert') {
+    if (record.state !== 'alert' || record.resolved) {
       continue;
     }
     alerts.push({
@@ -376,6 +376,9 @@ export const createWitnessServer = (store) =>
         const ok = payload.ok === true;
         const summary = String(payload.summary || (ok ? 'restore finished' : 'restore failed')).slice(0, 300);
         store.restoreRequest = null;
+        if (ok) {
+          await store.resolveLayerEvents('restore completed');
+        }
         store.recordActivity(ok ? 'restore_completed' : 'restore_failed', summary);
         return sendJson(response, 200, { status: 'acknowledged' });
       }

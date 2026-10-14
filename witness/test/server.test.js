@@ -381,10 +381,13 @@ test('queues a website restore request, rate-limits it, and records the ct105 ac
   const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-restore-'));
   const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
   await store.initialize();
+  await store.recordLayerEvent({ layer: 1, trigger: 'command_executed', state: 'alert', summary: 'rm on the bank log', detail: { cmd: 'rm' }, who: {} });
   const server = createWitnessServer(store);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const layer1Alerts = async () => (await (await fetch(`${baseUrl}/alerts`)).json()).alerts.filter((alert) => alert.kind === 'layer1_tripwire');
+  assert.equal((await layer1Alerts()).length, 1);
   const signed = (method, pathname, body = '') => {
     const timestamp = String(Date.now());
     return {
@@ -423,6 +426,11 @@ test('queues a website restore request, rate-limits it, and records the ct105 ac
     const kinds = store.recentActivity().map((item) => item.kind);
     assert.ok(kinds.includes('restore_requested'));
     assert.ok(kinds.includes('restore_completed'));
+    assert.equal((await layer1Alerts()).length, 0, 'restored alerts leave the card');
+    assert.equal((await (await fetch(`${baseUrl}/timeline`)).json()).events.filter((event) => event.layer === 1).length, 1, 'history stays');
+    const reloaded = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+    await reloaded.initialize();
+    assert.equal(reloaded.recentLayerEvents()[0].resolved, true, 'resolution survives a restart');
     assert.equal((await fetch(`${baseUrl}/v1/restore-request`, { method: 'POST' })).status, 429);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
