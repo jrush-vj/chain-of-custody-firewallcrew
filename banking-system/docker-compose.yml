@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: banking-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres_username}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in banking-system/.env}
+      POSTGRES_DB: ${DB_NAME:-bankingsystem}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: banking-backend
+    env_file:
+      - .env
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-bankingsystem}
+      DB_USER: ${DB_USER:-postgres_username}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in banking-system/.env}
+      PORT: 8080
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in banking-system/.env}
+      DATA_ENCRYPTION_KEY: ${DATA_ENCRYPTION_KEY:?Set DATA_ENCRYPTION_KEY in banking-system/.env}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://bank.jrushvj.dev}
+      EXTERNAL_PAYMENTS_API_KEY: ${EXTERNAL_PAYMENTS_API_KEY:?Set EXTERNAL_PAYMENTS_API_KEY in banking-system/.env}
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_URL: ${FRONTEND_PUBLIC_API_URL:-}
+    container_name: banking-frontend
+    ports:
+      - "127.0.0.1:3001:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge

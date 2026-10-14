@@ -1,0 +1,46 @@
+{
+  "name": "banking-system",
+  "version": "1.0.0",
+  "description": "Complete banking system with REST API and web interface",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "start:https": "cross-env PORT=5000 USE_SSL=true SSL_CERT=ssl/cert.pem SSL_KEY=ssl/key.pem node backend/server.js",
+    "dev": "nodemon backend/server.js",
+    "client": "cd frontend && npm start",
+    "client:https": "cd frontend && set \"HTTPS=true\" && set \"SSL_CRT_FILE=..\\ssl\\cert.pem\" && set \"SSL_KEY_FILE=..\\ssl\\key.pem\" && npm start",
+    "build": "cd frontend && npm run build",
+    "install-all": "npm install && cd frontend && npm install",
+    "migrate": "node backend/cli.js migrate",
+    "seed": "node backend/cli.js seed",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "keywords": [
+    "banking",
+    "api",
+    "rest"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "commander": "^11.1.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "inquirer": "^9.2.12",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "pg": "^8.11.3",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.0"
+  },
+  "devDependencies": {
+    "cross-env": "^10.1.0",
+    "nodemon": "^3.0.2"
+  }
+}
