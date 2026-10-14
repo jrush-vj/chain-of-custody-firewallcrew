@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
 import { once } from 'node:events';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WitnessStore } from '../store.js';
@@ -43,6 +43,7 @@ test('accepts authenticated prepare/commit and publishes a safe event view', asy
       },
       body
     });
+
   };
 
   try {
@@ -62,6 +63,63 @@ test('accepts authenticated prepare/commit and publishes a safe event view', asy
     assert.equal(invalid.status, 400);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('serves an integrity alert and disables writes when the ledger is altered', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-alert-'));
+  const ledger = path.join(directory, 'ledger.jsonl');
+  let server;
+  try {
+    const healthyStore = new WitnessStore(ledger);
+    await healthyStore.initialize();
+    await healthyStore.prepare({
+      event_id: 'c80ba038-26ef-4d2f-84a8-e504a67ec7e6',
+      transaction_id: 12,
+      type: 'withdrawal',
+      amount_minor: 100,
+      occurred_at: '2026-10-14T10:00:00.000Z'
+    });
+    const contents = await readFile(ledger, 'utf8');
+    await writeFile(ledger, contents.replace('"amount_minor":100', '"amount_minor":10000'));
+
+    const damagedStore = new WitnessStore(ledger);
+    await assert.rejects(() => damagedStore.initialize(), /integrity check failed/);
+    server = createWitnessServer(damagedStore);
+    server.listen(0, '127.0.0.1');
+    await once(server, 'listening');
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+
+    const health = await fetch(`${baseUrl}/health`);
+    assert.equal(health.status, 503);
+    assert.equal((await health.json()).healthy, false);
+
+    const status = await fetch(`${baseUrl}/v1/status`);
+    const statusBody = await status.json();
+    assert.equal(statusBody.healthy, false);
+    assert.match(statusBody.integrity_error, /integrity validation failed/i);
+
+    const dashboard = await fetch(baseUrl);
+    assert.equal(dashboard.status, 200);
+    assert.match(await dashboard.text(), /LEDGER INTEGRITY FAILURE/);
+
+    await assert.rejects(
+      () => damagedStore.prepare({
+        event_id: 'fd808249-0454-412c-800f-541a2526831f',
+        transaction_id: 13,
+        type: 'deposit',
+        amount_minor: 100,
+        occurred_at: '2026-10-14T10:01:00.000Z'
+      }),
+      (error) => error.statusCode === 503
+    );
+  } finally {
+    if (server?.listening) {
+      await new Promise((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      );
+    }
     await rm(directory, { recursive: true, force: true });
   }
 });

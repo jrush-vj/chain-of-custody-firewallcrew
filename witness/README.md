@@ -121,8 +121,9 @@ should not be public.
 ## Integrity and limits
 
 - On startup the service verifies sequence continuity and every ledger hash.
-  A mismatch prevents it from starting, rather than silently accepting altered
-  data.
+  A mismatch starts the dashboard in read-only alert mode: it shows
+  `LEDGER INTEGRITY FAILURE`, reports unhealthy status, and refuses all writes.
+  It does not show corrupted events as valid.
 - The JSONL hash chain detects accidental or partial modification; an attacker
   with Oracle root access can still rewrite the file and recompute the chain.
   Keep independent offline backups or an external anchor for stronger evidence.
@@ -136,3 +137,29 @@ should not be public.
   reported; a compromised producer can suppress events before transmission.
 - This is a hackathon/demo witness, not a production financial control or
   compliance system.
+
+## Demonstrating witness-ledger tampering
+
+The demo script changes a selected $1 withdrawal in the Oracle witness ledger
+to $100 without updating its record hash. Run these commands on the Oracle VPS,
+not ct105. The website will show the red integrity failure alert, the health
+endpoint will return HTTP 503, and witness writes will be disabled until the
+backup is restored. This demonstrates detection of edits to Oracle's evidence
+file; it does not simulate detection of changes made only to ct105's database.
+
+Replace `TRANSACTION_ID` with the ID of a witnessed $1 withdrawal:
+
+```bash
+sudo bash /opt/coc-witness-source/witness/demo-ledger-tamper.sh tamper TRANSACTION_ID
+```
+
+After observing the alert on `https://witness.jrushvj.dev/`, restore the exact
+original ledger:
+
+```bash
+sudo bash /opt/coc-witness-source/witness/demo-ledger-tamper.sh restore
+```
+
+Wait for `{"status":"ok"}` and refresh the dashboard before resuming demo
+transactions. The script refuses to overwrite an existing demo backup or
+change anything unless exactly one matching $1 withdrawal is found.

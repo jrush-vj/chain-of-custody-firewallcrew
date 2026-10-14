@@ -47,6 +47,11 @@ const html = `<!doctype html>
       heading.className = 'status ' + (status.healthy ? 'ok' : 'bad');
       heading.textContent = status.healthy ? 'Ledger integrity: OK' : 'LEDGER INTEGRITY FAILURE';
       statusNode.append(heading);
+      if (status.integrity_error) {
+        const alert = document.createElement('p');
+        alert.textContent = status.integrity_error;
+        statusNode.append(alert);
+      }
       const summary = document.createElement('p');
       summary.textContent = 'Records: ' + status.record_count + ' · Latest sequence: ' + status.latest_seq + ' · Prepared events: ' + status.prepared_count;
       statusNode.append(summary);
@@ -174,7 +179,10 @@ export const createWitnessServer = (store) =>
     const pathname = new URL(request.url, 'http://localhost').pathname;
     try {
       if (request.method === 'GET' && pathname === '/health') {
-        return sendJson(response, 200, { status: 'ok' });
+        return sendJson(response, store.status().healthy ? 200 : 503, {
+          status: store.status().healthy ? 'ok' : 'error',
+          ...store.status()
+        });
       }
       if (request.method === 'GET' && pathname === '/v1/status') {
         return sendJson(response, 200, store.status());
@@ -252,7 +260,11 @@ const start = async () => {
     throw new Error('Configure a valid WITNESS_NODE_ID and a WITNESS_HMAC_SECRET of at least 32 characters');
   }
   const store = new WitnessStore(dataPath);
-  await store.initialize();
+  try {
+    await store.initialize();
+  } catch (error) {
+    console.error('Witness ledger integrity validation failed; entering read-only alert mode:', error.message);
+  }
   const server = createWitnessServer(store);
   server.listen(port, bindHost, () => {
     console.log(`Witness listening on ${bindHost}:${port}; ledger ${dataPath}`);

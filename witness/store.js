@@ -13,52 +13,68 @@ export class WitnessStore {
     this.records = [];
     this.events = new Map();
     this.queue = Promise.resolve();
+    this.integrityError = null;
   }
 
   async initialize() {
-    await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
-    let contents;
     try {
-      contents = await readFile(this.filePath, 'utf8');
-    } catch (error) {
-      if (error.code === 'ENOENT') {
-        return;
+      await mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
+      let contents;
+      try {
+        contents = await readFile(this.filePath, 'utf8');
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          return;
+        }
+        throw error;
       }
+      await chmod(this.filePath, 0o600);
+
+      if (contents && !contents.endsWith('\n')) {
+        throw new Error('Witness ledger ends with an incomplete record');
+      }
+      const lines = contents.split('\n').filter(Boolean);
+      let previousHash = ZERO_HASH;
+      for (let index = 0; index < lines.length; index += 1) {
+        let record;
+        try {
+          record = JSON.parse(lines[index]);
+        } catch {
+          throw new Error(`Witness ledger contains invalid JSON at line ${index + 1}`);
+        }
+        const expected = {
+          seq: index + 1,
+          previous_hash: previousHash,
+          action: record.action,
+          payload: record.payload,
+          recorded_at: record.recorded_at
+        };
+        const expectedHash = recordHash(expected);
+        if (
+          !['prepare', 'commit', 'abort'].includes(record.action) ||
+          record.seq !== expected.seq ||
+          record.previous_hash !== expected.previous_hash ||
+          record.hash !== expectedHash
+        ) {
+          throw new Error(`Witness ledger integrity check failed at sequence ${index + 1}`);
+        }
+        this.applyRecord(record);
+        this.records.push(record);
+        previousHash = record.hash;
+      }
+    } catch (error) {
+      this.records = [];
+      this.events.clear();
+      this.integrityError = error.message;
       throw error;
     }
-    await chmod(this.filePath, 0o600);
+  }
 
-    if (contents && !contents.endsWith('\n')) {
-      throw new Error('Witness ledger ends with an incomplete record');
-    }
-    const lines = contents.split('\n').filter(Boolean);
-    let previousHash = ZERO_HASH;
-    for (let index = 0; index < lines.length; index += 1) {
-      let record;
-      try {
-        record = JSON.parse(lines[index]);
-      } catch {
-        throw new Error(`Witness ledger contains invalid JSON at line ${index + 1}`);
-      }
-      const expected = {
-        seq: index + 1,
-        previous_hash: previousHash,
-        action: record.action,
-        payload: record.payload,
-        recorded_at: record.recorded_at
-      };
-      const expectedHash = recordHash(expected);
-      if (
-        !['prepare', 'commit', 'abort'].includes(record.action) ||
-        record.seq !== expected.seq ||
-        record.previous_hash !== expected.previous_hash ||
-        record.hash !== expectedHash
-      ) {
-        throw new Error(`Witness ledger integrity check failed at sequence ${index + 1}`);
-      }
-      this.applyRecord(record);
-      this.records.push(record);
-      previousHash = record.hash;
+  assertHealthy() {
+    if (this.integrityError) {
+      const error = new Error('Witness ledger integrity validation failed; writes are disabled');
+      error.statusCode = 503;
+      throw error;
     }
   }
 
@@ -94,6 +110,7 @@ export class WitnessStore {
   }
 
   async appendRecord(action, payload) {
+    this.assertHealthy();
     const record = {
       seq: this.records.length + 1,
       previous_hash: this.records.at(-1)?.hash || ZERO_HASH,
@@ -116,6 +133,7 @@ export class WitnessStore {
 
   async prepare(event) {
     return this.enqueue(async () => {
+      this.assertHealthy();
       const existing = this.events.get(event.event_id);
       if (existing) {
         if (JSON.stringify(existing.event) !== JSON.stringify(event)) {
@@ -137,6 +155,7 @@ export class WitnessStore {
 
   async transition(eventId, action) {
     return this.enqueue(async () => {
+      this.assertHealthy();
       const existing = this.events.get(eventId);
       if (!existing) {
         const error = new Error('Unknown event ID');
@@ -161,7 +180,10 @@ export class WitnessStore {
 
   status() {
     return {
-      healthy: true,
+      healthy: !this.integrityError,
+      ...(this.integrityError && {
+        integrity_error: 'Ledger integrity validation failed; witness writes are disabled.'
+      }),
       record_count: this.records.length,
       latest_seq: this.records.at(-1)?.seq || 0,
       latest_hash: this.records.at(-1)?.hash || ZERO_HASH,
@@ -170,6 +192,9 @@ export class WitnessStore {
   }
 
   recentEvents(limit = 50) {
+    if (this.integrityError) {
+      return [];
+    }
     return [...this.events.entries()]
       .map(([eventId, item]) => ({
         ...item.event,
