@@ -1,9 +1,7 @@
-# syntax=docker/dockerfile:1
-
 FROM node:18-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
-RUN npm install --omit=dev && npm audit fix --force
+RUN npm install --omit=dev
 
 FROM node:18-alpine
 WORKDIR /app

@@ -1,6 +1,6 @@
 # Banking System
 
-This local-only repository now contains the banking application from
+This repository contains the banking application from
 [`jtr-0901/Banking-system-fullstack`](https://github.com/jtr-0901/Banking-system-fullstack).
 The former defense and hacker-agent components have been removed.
 
@@ -12,24 +12,45 @@ Never commit `.env` or real credentials.
 
 ## Existing Cloudflare Tunnel
 
-The `bank.jrushvj.dev` tunnel configuration on ct105-ai is intended to remain
-unchanged. The Compose frontend is mapped to `127.0.0.1:3001`, the same local
-origin the tunnel already targets. Backend and PostgreSQL host ports are
-loopback-only and do not need public DNS records.
+The `bank.jrushvj.dev` Cloudflare Tunnel configuration on ct105-ai should
+continue to target `http://127.0.0.1:3001`. Compose maps the frontend to that
+loopback address; backend and PostgreSQL host ports are also loopback-only.
+Cloudflare DNS and tunnel credentials are not stored in this repository.
 
-On the server, start only the banking services:
+## Deploy on ct105-ai
+
+On the server, clone this repository to `/opt/chain-of-custody`, create
+`banking-system/.env` from the example, and set unique strong secrets. Then
+start only the banking services:
 
 ```bash
 cd /opt/chain-of-custody/banking-system
 cp .env.example .env
-# Edit .env and set unique production secrets before starting.
+nano .env
 docker compose up -d postgres backend frontend
 ```
 
-The demo banking service will be unavailable while its old deployment is
-removed, and until this replacement is configured and started on ct105-ai.
+Install the optional systemd polling timer to fetch `main` and redeploy the
+banking Compose services after banking files change:
 
-## Local version control
+```bash
+sudo install -m 0644 deploy/ct105/banking-deploy.service /etc/systemd/system/
+sudo install -m 0644 deploy/ct105/banking-deploy.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now banking-deploy.timer
+sudo systemctl start banking-deploy.service
+```
 
-This checkout is intentionally detached from a Git remote. Changes can still
-be tracked with local commits; do not push this repository to a remote.
+The timer checks every two minutes. It builds/restarts the banking containers
+only when the deployed commit contains changes under `banking-system/`.
+Follow deployment logs with:
+
+```bash
+sudo journalctl -u banking-deploy.service -f
+```
+
+## v2 defense methodology
+
+[`v2_docs/README.md`](./v2_docs/README.md) records how the v2 three-layer plan
+is being adapted to the current hosting limits. Defense features in those
+documents are plans/prototypes, not part of this banking deployment.
