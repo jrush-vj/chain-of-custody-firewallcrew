@@ -18,6 +18,9 @@ export class WitnessStore {
     this.activity = [];
     this.activityCounter = Date.now();
     this.reportedMismatches = new Set();
+    this.lastHeartbeatAt = null;       // ms; heartbeats are held in memory, not the ledger
+    this.lastHeartbeatSeq = 0;
+    this.lastContactAt = null;         // ms; any signed request from ct105 counts as contact
     this.restoreRequest = null;        // one pending website restore, picked up by ct105
     this.lastRestoreRequestAt = 0;     // rate limit: one request per minute
     this.queue = Promise.resolve();
@@ -129,9 +132,12 @@ export class WitnessStore {
 
   applyState(record) {
     if (record.action === 'layer_resolve') {
-      // A completed restore resolves every Layer 1 alert recorded before it; the history stays.
+      // Resolves the layer events recorded before it, optionally only one layer or kind; the history stays.
+      const { layer, kind } = record.payload;
       for (const item of this.layerEvents) {
-        if (item.id < record.seq) item.resolved = true;
+        if (item.id < record.seq && (!layer || item.layer === layer) && (!kind || item.kind === kind)) {
+          item.resolved = true;
+        }
       }
       return;
     }
@@ -191,8 +197,12 @@ export class WitnessStore {
     return entry;
   }
 
-  resolveLayerEvents(reason) {
-    return this.enqueue(() => this.appendRecord('layer_resolve', { reason }));
+  resolveLayerEvents(reason, scope = {}) {
+    return this.enqueue(() => this.appendRecord('layer_resolve', { reason, ...scope }));
+  }
+
+  hasOpenLayerEvent(kind) {
+    return this.layerEvents.some((item) => item.kind === kind && item.state === 'alert' && !item.resolved);
   }
 
   recordLayerEvent(payload) {

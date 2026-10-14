@@ -15,6 +15,9 @@ const maxBodyBytes = 16 * 1024;
 const html = readFileSync(new URL('./auditor.html', import.meta.url), 'utf8');
 // Set on ct105-ai only after the Layer 1 command tripwire is installed there; otherwise the card reads IDLE.
 const layer1Enabled = process.env.WITNESS_LAYER1_ENABLED === '1';
+// ct105's monitor sends a heartbeat every interval; this many missed beats raise a Layer 2 'silence' alert.
+const heartbeatIntervalS = Number(process.env.WITNESS_HEARTBEAT_S || 30);
+const heartbeatMissedLimit = Number(process.env.WITNESS_HEARTBEAT_MISSED || 3);
 // Same Layer 2 alert kinds the Cybersec auditor view groups under the Layer 2 card.
 const LAYER2_KINDS = new Set(['sequence_gap', 'chain_break', 'bad_signature', 'unknown_key_id', 'entry_edited',
   'entry_deleted', 'entries_reordered', 'entry_replayed', 'late_entry', 'challenge_mismatch',
@@ -55,20 +58,22 @@ const auditorStatus = (store) => {
     ? store.lastSuccessfulReconciliationAt
     : reconciliation.checked_at;
   const checkedAt = hasVerifiedRecords ? toEpochSeconds(successfulCheck) : null;
-  const connection =
+  const baseConnection =
     reconciliation.state === 'mismatch' || (reconciliation.state === 'ok' && hasVerifiedRecords)
       ? 'connected'
       : reconciliation.state === 'unavailable'
         ? 'lost'
         : 'waiting';
+  // Heartbeat silence means the monitored host went quiet, whatever the bank API says.
+  const connection = store.hasOpenLayerEvent('silence') ? 'lost' : baseConnection;
   const latest = store.latestCommittedEvent();
   return {
     integration_mode: 'banking-witness',
     platform_id: 'banking-system',
     connection,
-    heartbeat_age: store.lastSuccessfulReconciliationAt
-      ? Math.max(0, Date.now() / 1000 - toEpochSeconds(store.lastSuccessfulReconciliationAt))
-      : null,
+    // Seconds since ct105's last heartbeat; null until the first one arrives.
+    heartbeat_age: store.lastHeartbeatAt ? Math.max(0, (Date.now() - store.lastHeartbeatAt) / 1000) : null,
+    heartbeat_interval: heartbeatIntervalS,
     records_verified: reconciliation.checked_transactions,
     last_verified: hasVerifiedRecords && latest
       ? { seq: latest.transaction_id, time: latest.updated_at }
@@ -295,6 +300,11 @@ const authorize = (request, pathname, body) => {
 export const createWitnessServer = (store) =>
   createServer(async (request, response) => {
     const pathname = new URL(request.url, 'http://localhost').pathname;
+    // A signed request that passes authorization is proof of contact with ct105.
+    const authorizeContact = (req, requestPath, body) => {
+      authorize(req, requestPath, body);
+      store.lastContactAt = Date.now();
+    };
     try {
       if (request.method === 'GET' && pathname === '/health') {
         return sendJson(response, store.status().healthy ? 200 : 503, {
@@ -359,12 +369,12 @@ export const createWitnessServer = (store) =>
         return sendJson(response, 202, { status: 'requested', id: store.restoreRequest.id });
       }
       if (request.method === 'GET' && pathname === '/v1/restore-pending') {
-        authorize(request, pathname, '');
+        authorizeContact(request, pathname, '');
         return sendJson(response, 200, { pending: store.restoreRequest });
       }
       if (request.method === 'POST' && pathname === '/v1/restore-ack') {
         const body = await readBody(request);
-        authorize(request, pathname, body);
+        authorizeContact(request, pathname, body);
         let payload;
         try {
           payload = JSON.parse(body);
@@ -403,13 +413,13 @@ export const createWitnessServer = (store) =>
       }
       if (
         request.method !== 'POST' ||
-        !['/v1/prepare', '/v1/commit', '/v1/abort', '/v1/layer-events'].includes(pathname)
+        !['/v1/prepare', '/v1/commit', '/v1/abort', '/v1/layer-events', '/v1/heartbeat'].includes(pathname)
       ) {
         return sendJson(response, 404, { error: 'Not found' });
       }
 
       const body = await readBody(request);
-      authorize(request, pathname, body);
+      authorizeContact(request, pathname, body);
       let payload;
       try {
         payload = JSON.parse(body);
@@ -425,6 +435,23 @@ export const createWitnessServer = (store) =>
       }
 
       let result;
+      if (pathname === '/v1/heartbeat') {
+        // seq must rise: ct105 uses its clock in ms, so it keeps rising across monitor restarts.
+        if (!Number.isSafeInteger(payload.seq) || payload.seq <= 0) {
+          return sendJson(response, 400, { error: 'seq must be a positive integer' });
+        }
+        if (payload.seq <= store.lastHeartbeatSeq) {
+          store.recordActivity('heartbeat_rejected', `replayed heartbeat seq ${payload.seq}`);
+          return sendJson(response, 409, { error: 'Replayed heartbeat' });
+        }
+        store.lastHeartbeatSeq = payload.seq;
+        store.lastHeartbeatAt = Date.now();
+        store.recordActivity('heartbeat', `heartbeat from ${nodeId}`);
+        if (store.hasOpenLayerEvent('silence')) {
+          await store.resolveLayerEvents('heartbeat resumed', { layer: 2, kind: 'silence' });
+        }
+        return sendJson(response, 200, { status: 'ok', interval_s: heartbeatIntervalS });
+      }
       if (pathname === '/v1/layer-events') {
         validateLayerEvent(payload);
         const record = await store.recordLayerEvent({
@@ -466,6 +493,28 @@ export const createWitnessServer = (store) =>
     }
   });
 
+// Raises a Layer 2 'silence' alert once the monitored host has missed too many heartbeats. It only
+// arms after the first heartbeat, so a witness restart does not alert before ct105 has had a chance to beat.
+export const checkHeartbeatSilence = async (store, nowMs = Date.now()) => {
+  if (store.integrityError || !store.lastHeartbeatAt || store.hasOpenLayerEvent('silence')) {
+    return false;
+  }
+  const silentS = (nowMs - store.lastHeartbeatAt) / 1000;
+  if (silentS <= heartbeatIntervalS * heartbeatMissedLimit) {
+    return false;
+  }
+  await store.recordLayerEvent({
+    layer: 2,
+    trigger: 'heartbeat_silence',
+    kind: 'silence',
+    state: 'alert',
+    summary: `no heartbeat from the monitored host for ${Math.round(silentS)} s`,
+    detail: { seconds: Math.round(silentS), expected_every_s: heartbeatIntervalS },
+    who: {}
+  });
+  return true;
+};
+
 const start = async () => {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('WITNESS_PORT must be a valid TCP port');
@@ -481,6 +530,9 @@ const start = async () => {
   }
   const server = createWitnessServer(store);
   startBankReconciliation(store);
+  setInterval(() => {
+    checkHeartbeatSilence(store).catch((error) => console.error('Heartbeat silence check failed:', error.message));
+  }, 5_000);
   server.listen(port, bindHost, () => {
     console.log(`Witness listening on ${bindHost}:${port}; ledger ${dataPath}`);
   });

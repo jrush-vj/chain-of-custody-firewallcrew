@@ -55,6 +55,7 @@ SNAPSHOT_LIMIT = 3000  # keeps one event well under the witness's 16 KB request 
 SUMMARY_LIMIT = 200
 ARM_CHECK_S = 10
 RESTORE_CHECK_S = 5
+HEARTBEAT_S = float(os.environ.get("HEARTBEAT_S", "30"))
 RESTORE_SCRIPT = os.environ.get("RESTORE_SCRIPT", "/opt/chain-of-custody/deploy/ct105/restore-normal.sh")
 WRAPPED_COMMANDS = ["nano", "vi", "vim", "sed", "rm", "mv", "cp", "truncate", "shred", "tee"]
 
@@ -314,6 +315,23 @@ def check_restore_request():
         log(f"restore acknowledgement not delivered, will retry: {error}")
 
 
+# ---------- heartbeat ----------
+
+def send_heartbeat():
+    """One signed heartbeat. Never queued or retried: a missed beat is what the witness watches for.
+
+    seq is the clock in milliseconds, so it keeps rising across monitor restarts and the witness can
+    reject replays. It is sent whether or not anything is being tampered with.
+    """
+    body = json.dumps({"seq": int(time.time() * 1000), "interval_s": HEARTBEAT_S}).encode("utf-8")
+    try:
+        with urllib.request.urlopen(signed_request("POST", "/v1/heartbeat", body), timeout=5):
+            return True
+    except (urllib.error.URLError, OSError) as error:
+        log(f"heartbeat not delivered: {error}")
+        return False
+
+
 # ---------- main loop ----------
 
 def run():
@@ -332,6 +350,7 @@ def run():
     pending = [status_event(armed, count)]
     last_armed, next_status_check = armed, time.time() + ARM_CHECK_S
     next_restore_check = time.time() + RESTORE_CHECK_S
+    next_heartbeat = time.time()  # the first heartbeat goes out immediately
     log(f"watching {WATCH_DIR} and spool {COMMANDS_SPOOL}; armed={armed} wrappers={count}")
 
     while True:
@@ -352,6 +371,9 @@ def run():
         if time.time() >= next_restore_check:
             check_restore_request()
             next_restore_check = time.time() + RESTORE_CHECK_S
+        if time.time() >= next_heartbeat:
+            send_heartbeat()
+            next_heartbeat = time.time() + HEARTBEAT_S
 
         still_pending = []
         for event in pending:

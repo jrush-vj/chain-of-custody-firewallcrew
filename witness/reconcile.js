@@ -107,9 +107,8 @@ export const reconcileBankTransactions = async (store, fetchImpl = fetch) => {
     mismatches
   });
 
-  // Each pass that reaches the bank is a heartbeat; a bank outage records nothing, so the
-  // auditor's heartbeat line goes flat. New mismatches and recoveries are challenge entries.
-  store.recordActivity('heartbeat', `bank reconciled: ${witnessed.length} records, ${mismatches.length} mismatches`);
+  // New mismatches and recoveries become challenge entries on the auditor graph. Heartbeats come
+  // from ct105's monitor, not from this pass, so tampering never changes the heartbeat rhythm.
   const current = new Set();
   for (const mismatch of mismatches) {
     const key = `${mismatch.transaction_id}:${mismatch.issue}`;

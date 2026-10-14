@@ -10,7 +10,7 @@ import { reconcileBankTransactions } from '../reconcile.js';
 
 process.env.WITNESS_NODE_ID = 'test-node';
 process.env.WITNESS_HMAC_SECRET = 'test-secret-value-with-at-least-32-characters';
-const { createWitnessServer } = await import('../server.js');
+const { createWitnessServer, checkHeartbeatSilence } = await import('../server.js');
 
 test('serves the cybersec auditor dashboard on the banking witness API', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-dashboard-'));
@@ -367,7 +367,7 @@ test('records heartbeats and challenge entries from bank reconciliation', async 
   const matching = [{ transaction_id: 21, type: 'deposit', amount_minor: '50000', event_id: event.event_id }];
 
   await reconcileBankTransactions(store, bankReturns(matching));
-  assert.ok(store.recentActivity().some((item) => item.kind === 'heartbeat'));
+  assert.ok(!store.recentActivity().some((item) => item.kind === 'heartbeat'), 'heartbeats come from ct105, not the reconcile pass');
 
   await reconcileBankTransactions(store, bankReturns([{ ...matching[0], amount_minor: '10000' }]));
   assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_mismatch' && item.detail.includes('transaction #21')));
@@ -432,6 +432,60 @@ test('queues a website restore request, rate-limits it, and records the ct105 ac
     await reloaded.initialize();
     assert.equal(reloaded.recentLayerEvents()[0].resolved, true, 'resolution survives a restart');
     assert.equal((await fetch(`${baseUrl}/v1/restore-request`, { method: 'POST' })).status, 429);
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('accepts signed heartbeats, rejects replays, and raises then clears a silence alert', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-beat-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const beat = (payload, { signed = true } = {}) => {
+    const body = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const headers = { 'content-type': 'application/json' };
+    if (signed) {
+      headers['x-witness-node'] = process.env.WITNESS_NODE_ID;
+      headers['x-witness-timestamp'] = timestamp;
+      headers['x-witness-signature'] = createHmac('sha256', process.env.WITNESS_HMAC_SECRET)
+        .update(`POST
+/v1/heartbeat
+${timestamp}
+${body}`)
+        .digest('hex');
+    }
+    return fetch(`${baseUrl}/v1/heartbeat`, { method: 'POST', headers, body });
+  };
+  const silenceAlerts = async () => (await (await fetch(`${baseUrl}/alerts`)).json()).alerts.filter((alert) => alert.kind === 'silence');
+
+  try {
+    assert.equal((await beat({ seq: 1000 }, { signed: false })).status, 401);
+    assert.equal((await beat({ seq: 'x' })).status, 400);
+    assert.equal((await beat({ seq: 1000 })).status, 200);
+    assert.equal((await beat({ seq: 1000 })).status, 409, 'replay');
+    assert.equal((await beat({ seq: 999 })).status, 409, 'older than the last');
+
+    const status = await (await fetch(`${baseUrl}/status`)).json();
+    assert.ok(status.heartbeat_age >= 0 && status.heartbeat_age < 5);
+    assert.equal(status.heartbeat_interval, 30);
+    assert.ok(store.recentActivity().some((item) => item.kind === 'heartbeat'));
+
+    assert.equal(await checkHeartbeatSilence(store, Date.now() + 10_000), false, 'within three intervals');
+    assert.equal(await checkHeartbeatSilence(store, Date.now() + 200_000), true, 'three beats missed');
+    assert.equal((await silenceAlerts()).length, 1);
+    assert.equal((await (await fetch(`${baseUrl}/status`)).json()).connection, 'lost');
+    assert.equal(await checkHeartbeatSilence(store, Date.now() + 300_000), false, 'no duplicate while open');
+
+    assert.equal((await beat({ seq: 1001 })).status, 200);
+    assert.equal((await silenceAlerts()).length, 0, 'a new heartbeat clears the alert');
+    const timeline = (await (await fetch(`${baseUrl}/timeline`)).json()).events;
+    assert.ok(timeline.some((event) => event.trigger === 'heartbeat_silence' && event.resolved === true), 'history stays');
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });

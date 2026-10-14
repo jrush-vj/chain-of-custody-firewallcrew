@@ -260,7 +260,7 @@ function drawMonitor() {
   const recent = acts.filter((a) => a.time > now - WINDOW - 5);
   const beats = recent.filter((a) => a.kind === "heartbeat");
   const lastBeat = S && S.heartbeat_age != null ? S.server_time - S.heartbeat_age : null;
-  const dead = !lastBeat || now - lastBeat > 15;
+  const dead = !lastBeat || now - lastBeat > 2.5 * ((S && S.heartbeat_interval) || 30);
   // baseline: green while heartbeats arrive, flat red once they stop
   g.lineWidth = 2; g.strokeStyle = dead ? col("--red") : col("--green"); g.setLineDash(dead ? [6, 6] : []);
   g.beginPath(); g.moveTo(0, mid);
