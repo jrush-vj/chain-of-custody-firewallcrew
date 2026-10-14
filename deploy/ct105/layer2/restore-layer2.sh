@@ -27,6 +27,7 @@ while IFS=$'\t' read -r when id field old new; do
   case "$field" in
     amount) sql="UPDATE transactions SET amount = $old WHERE id = $id AND amount = $new RETURNING id;" ;;
     type)   sql="UPDATE transactions SET type = '$old' WHERE id = $id AND type = '$new' RETURNING id;" ;;
+    status) sql="UPDATE transactions SET status = '$old' WHERE id = $id AND status = '$new' RETURNING id;" ;;
     *)      echo "skipping unknown journal entry: $when $id $field"; continue ;;
   esac
   back="$(psql_q "$sql")"

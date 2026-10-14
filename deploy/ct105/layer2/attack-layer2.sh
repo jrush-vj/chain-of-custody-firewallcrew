@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Demo Layer 2: two reversible changes to committed transaction history in the banking database.
-# The witness reconciles its sealed copy against the bank every 10 seconds and must catch each one.
+# Demo Layer 2: three reversible changes to committed transaction history in the banking database.
+# The witness must catch each one.
 #
-#   1. amount: one committed transaction's amount changes by 1.00
-#   2. type:   a deposit or withdrawal has its type flipped (the same row is reused if it is the
-#              only witnessed one)
+#   1. amount: one committed transaction's amount changes by 1.00          (the four-field check, ~10 s)
+#   2. type:   a deposit or withdrawal has its type flipped                  (the four-field check, ~10 s)
+#   3. status: a completed transaction is marked failed                     (only the record copies can see
+#              this; needs the record sync, so it is caught at the next 30 s heartbeat)
+#      Rows are reused when only one witnessed row exists.
 #
 # Each change is written to the journal first, then undone by a trap, verified, and the witness must
 # report the row clear again. Only transactions.amount and transactions.type on demo rows change.
@@ -21,7 +23,7 @@ if [ "${COC_SKIP_HOST_CHECK:-0}" != 1 ] && [ "$(hostname)" != ct105-ai ]; then
 fi
 
 app_dir="${APP_DIR:-/opt/chain-of-custody/banking-system}"
-witness_url="${WITNESS_STATUS_URL:-https://witness.jrushvj.dev/v1/status}"
+witness_url="${WITNESS_MISMATCHES_URL:-https://witness.jrushvj.dev/mismatches}"   # the combined findings list
 journal="${COC_LAYER2_JOURNAL:-/var/lib/coc-demo/layer2-changes.tsv}"
 poll_limit="${POLL_LIMIT_S:-240}"
 pause_s="${PAUSE_S:-15}"   # time for the dashboard to show each alert before the restore
@@ -33,7 +35,7 @@ mkdir -p "$(dirname "$journal")"
 
 psql_q() { docker compose exec -T postgres psql -U "$DB_USER" -d "$db" -tA -F'|' -c "$1"; }
 
-# Prints the witnessed transaction ids the witness currently flags as mismatched, or "ERROR".
+# Prints the transaction ids the witness currently flags (from either check), or "ERROR".
 witness_mismatches() {
   curl --fail -s --max-time 10 "$witness_url" | python3 -c '
 import json, sys
@@ -41,8 +43,7 @@ try:
     data = json.load(sys.stdin)
 except Exception:
     print("ERROR"); sys.exit(0)
-recon = data.get("bank_reconciliation", {})
-print(",".join(sorted(str(m["transaction_id"]) for m in recon.get("mismatches", []))))
+print(",".join(sorted(str(m["seq"]) for m in data.get("mismatches", []))))
 ' 2>/dev/null || echo ERROR
 }
 
@@ -137,9 +138,19 @@ run_case "type $type2 -> $new_type" "$id2" type "$type2" "$new_type" \
   "UPDATE transactions SET type = '$type2' WHERE id = $id2 AND type = '$new_type' RETURNING id;" \
   || failures=$((failures + 1))
 
+# Case 3: status change. The four-field check never sees this column; the witness's own copy of the row does.
+row3="$(psql_q "SELECT id, amount, type FROM transactions WHERE id = $id2;")"
+IFS='|' read -r id3 old3 type3 <<< "$row3"
+status3="$(psql_q "SELECT status FROM transactions WHERE id = $id3;")"
+if [ "$status3" = completed ]; then
+  run_case "status completed -> failed (only the record copies can see this)" "$id3" status completed failed     "UPDATE transactions SET status = 'failed' WHERE id = $id3 AND status = 'completed' RETURNING id;"     "UPDATE transactions SET status = 'completed' WHERE id = $id3 AND status = 'failed' RETURNING id;"     || failures=$((failures + 1))
+else
+  echo "skipping the status case: transaction #$id3 has status '$status3', not 'completed'"
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
-  echo "LAYER 2 DEMO: both changes were caught and restored"
+  echo "LAYER 2 DEMO: all changes were caught and restored"
 else
   echo "LAYER 2 DEMO: $failures case(s) failed; see the RESULT lines above"
   exit 1
