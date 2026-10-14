@@ -18,6 +18,9 @@ const layer1Enabled = process.env.WITNESS_LAYER1_ENABLED === '1';
 // ct105's monitor sends a heartbeat every interval; this many missed beats raise a Layer 2 'silence' alert.
 const heartbeatIntervalS = Number(process.env.WITNESS_HEARTBEAT_S || 30);
 const heartbeatMissedLimit = Number(process.env.WITNESS_HEARTBEAT_MISSED || 3);
+// Layer 3: this long without any signed request from ct105 and the witness presumes a quarantine.
+const quarantineAfterS = Number(process.env.WITNESS_QUARANTINE_AFTER_S || 45);
+const holderNames = ['SOC lead', 'Auditor', 'Compliance officer'];
 // Same Layer 2 alert kinds the Cybersec auditor view groups under the Layer 2 card.
 const LAYER2_KINDS = new Set(['sequence_gap', 'chain_break', 'bad_signature', 'unknown_key_id', 'entry_edited',
   'entry_deleted', 'entries_reordered', 'entry_replayed', 'late_entry', 'challenge_mismatch',
@@ -49,6 +52,33 @@ const sendJson = (response, statusCode, payload) => {
 };
 
 const toEpochSeconds = (value) => (value ? Date.parse(value) / 1000 : null);
+
+// Layer 3 state, derived from what ct105 reported. A confirmed quarantine is an unresolved
+// 'quarantine:locked' event that no later event releases. Without one, the witness still presumes a
+// quarantine when ct105 has been silent past the threshold (only after the first contact).
+const quarantineState = (store, nowMs = Date.now()) => {
+  const latest = store.recentLayerEvents().filter((item) => item.layer === 3 && !item.resolved).at(-1);
+  const base = {
+    after: quarantineAfterS,
+    needed: 2,
+    holders: holderNames.map((name, index) => ({ name, approved: store.holderApprovals.has(index) })),
+    unlock_issued: store.holderApprovals.size >= 2,
+    unverified: null
+  };
+  if (latest && latest.trigger === 'quarantine:locked') {
+    return {
+      ...base,
+      active: true,
+      since: toEpochSeconds(latest.recorded_at),
+      confirmed: true,
+      id: latest.detail.quarantine_id || null
+    };
+  }
+  if (store.lastContactAt && nowMs - store.lastContactAt > quarantineAfterS * 1000) {
+    return { ...base, active: true, since: store.lastContactAt / 1000, confirmed: false, id: null };
+  }
+  return { ...base, active: false, since: null, confirmed: false, id: null };
+};
 
 const auditorStatus = (store) => {
   const status = store.status();
@@ -87,12 +117,11 @@ const auditorStatus = (store) => {
         : reconciliation.state === 'mismatch' ? 'red' : 'unknown',
       C: 'unknown'
     },
-    layers: { 1: layer1Enabled ? 'on' : 'off', 2: 'on', 3: 'off' },
+    layers: { 1: layer1Enabled ? 'on' : 'off', 2: 'on', 3: 'on' },
     state: !status.healthy || reconciliation.state === 'mismatch'
       ? 'alert'
       : reconciliation.state === 'ok' && hasVerifiedRecords ? 'normal' : 'unknown',
-    // Layer 3 (quarantine) is not deployed on the banking host; the auditor view still needs this shape.
-    quarantine: { active: false, since: null, confirmed: false, id: null, unverified: null, after: 45, needed: 2, holders: [], unlock_issued: false },
+    quarantine: quarantineState(store),
     bank_reconciliation: {
       state: reconciliation.state,
       checked_at: hasVerifiedRecords ? successfulCheck : null,
@@ -133,7 +162,7 @@ const auditorAlerts = (store) => {
       continue;
     }
     alerts.push({
-      kind: record.layer === 1 ? 'layer1_tripwire' : record.kind,
+      kind: record.layer === 1 ? 'layer1_tripwire' : record.layer === 3 ? 'quarantine' : record.kind,
       ref: record.trigger,
       tamper_type: record.trigger,
       detail: record.summary,
@@ -151,7 +180,15 @@ const auditorLayerEvents = (store) => store.recentLayerEvents().map((record) => 
   time: toEpochSeconds(record.recorded_at),
   who: record.who || {},
   resolved: Boolean(record.resolved),
-  detail: { ...record.detail, summary: record.summary }
+  detail: record.layer === 3
+    ? {
+        ...record.detail,
+        summary: record.summary,
+        // The page lists these as {cmd} rows; they travel as newline-joined strings to keep the payload flat.
+        site_down: String(record.detail.site_down || '').split('\n').filter(Boolean).map((cmd) => ({ cmd })),
+        lockout: String(record.detail.lockout || '').split('\n').filter(Boolean).map((cmd) => ({ cmd }))
+      }
+    : { ...record.detail, summary: record.summary }
 }));
 
 const auditorMismatches = (store) => {
@@ -206,8 +243,8 @@ const validateLayerEvent = (event) => {
   if (Object.keys(event).some((field) => !fields.includes(field)) || required.some((field) => !Object.hasOwn(event, field))) {
     invalid('Layer event has missing or unknown fields');
   }
-  if (![1, 2].includes(event.layer)) {
-    invalid('layer must be 1 or 2');
+  if (![1, 2, 3].includes(event.layer)) {
+    invalid('layer must be 1, 2 or 3');
   }
   if (typeof event.trigger !== 'string' || !/^[a-z0-9_:.-]{1,80}$/.test(event.trigger)) {
     invalid('trigger must be a short lowercase identifier');
@@ -218,8 +255,8 @@ const validateLayerEvent = (event) => {
   if (event.layer === 2 && !LAYER2_KINDS.has(event.kind)) {
     invalid('Layer 2 events need a known kind');
   }
-  if (event.layer === 1 && event.kind !== undefined) {
-    invalid('Layer 1 events do not take a kind');
+  if (event.layer !== 2 && event.kind !== undefined) {
+    invalid('Only Layer 2 events take a kind');
   }
   if (typeof event.summary !== 'string' || event.summary.length === 0 || event.summary.length > 200) {
     invalid('summary must be 1 to 200 characters');
@@ -393,13 +430,37 @@ export const createWitnessServer = (store) =>
         store.recordActivity(ok ? 'restore_completed' : 'restore_failed', summary);
         return sendJson(response, 200, { status: 'acknowledged' });
       }
+      // Key-holder approval for a confirmed quarantine. The quarantine is a dry run, so nothing on ct105
+      // needs unlocking: two approvals only record a release on the witness.
       if (request.method === 'POST' && pathname === '/quarantine/approve') {
-        await readBody(request);
-        return sendJson(response, 409, {
-          status: 'disabled',
-          dry_run: true,
-          reason: 'Layer 3 quarantine is not integrated; no system actions are available.'
-        });
+        let payload = {};
+        try {
+          payload = JSON.parse((await readBody(request)) || '{}');
+        } catch {
+          return sendJson(response, 400, { error: 'Invalid JSON body' });
+        }
+        const holder = payload.holder;
+        if (!Number.isInteger(holder) || holder < 0 || holder >= holderNames.length) {
+          return sendJson(response, 400, { error: 'holder must be 0, 1 or 2' });
+        }
+        const state = quarantineState(store);
+        if (!state.active || !state.confirmed) {
+          return sendJson(response, 409, { status: 'nothing_to_release', reason: 'No confirmed quarantine is waiting for approval' });
+        }
+        store.holderApprovals.add(holder);
+        const approvals = store.holderApprovals.size;
+        if (approvals >= 2) {
+          store.holderApprovals.clear();
+          await store.recordLayerEvent({
+            layer: 3,
+            trigger: 'quarantine:released',
+            state: 'normal',
+            summary: 'quarantine released after two key-holder approvals (dry run: nothing had been locked)',
+            detail: { quarantine_id: state.id || '', dry_run: true },
+            who: {}
+          });
+        }
+        return sendJson(response, 200, { status: 'recorded', approvals });
       }
       if (request.method === 'GET' && pathname === '/') {
         response.writeHead(200, {

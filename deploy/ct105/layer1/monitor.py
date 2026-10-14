@@ -43,6 +43,10 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "layer3"))
+import l3_config_guard as config_guard  # noqa: E402
+import l3_quarantine  # noqa: E402
+
 WATCH_DIR = os.environ.get("WATCH_DIR", "/var/log/bank-demo")
 STATE_DIR = os.environ.get("STATE_DIR", "/var/lib/coc-layer1")
 COMMANDS_SPOOL = os.environ.get("COMMANDS_SPOOL", "/var/spool/coc-layer1/commands.jsonl")
@@ -56,6 +60,11 @@ SUMMARY_LIMIT = 200
 ARM_CHECK_S = 10
 RESTORE_CHECK_S = 5
 HEARTBEAT_S = float(os.environ.get("HEARTBEAT_S", "30"))
+CONFIG_CHECK_S = 5
+QUARANTINE_AFTER_S = float(os.environ.get("QUARANTINE_AFTER_S", "45"))
+# While this file exists every witness request fails, which simulates a cut network link in the demo.
+CUT_FLAG = os.environ.get("COC_WITNESS_CUT_FLAG", "/var/lib/coc-demo/witness-cut")
+_last_contact = time.time()
 RESTORE_SCRIPT = os.environ.get("RESTORE_SCRIPT", "/opt/chain-of-custody/deploy/ct105/restore-normal.sh")
 WRAPPED_COMMANDS = ["nano", "vi", "vim", "sed", "rm", "mv", "cp", "truncate", "shred", "tee"]
 
@@ -246,6 +255,16 @@ def status_event(armed, count):
 
 # ---------- witness transport ----------
 
+def open_witness(request, timeout=10):
+    """The one place witness requests are sent. Honours the simulated cut and records the last contact."""
+    global _last_contact
+    if os.path.exists(CUT_FLAG):
+        raise urllib.error.URLError("simulated network cut (flag file present)")
+    response = urllib.request.urlopen(request, timeout=timeout)
+    _last_contact = time.time()
+    return response
+
+
 def signed_request(method, path, body=b""):
     """A witness request signed with the shared HMAC secret. The signature covers method, path, time, body."""
     url = os.environ["WITNESS_URL"].rstrip("/") + path
@@ -271,7 +290,7 @@ def post_event(event):
     """Send one signed event. Returns True when the witness accepted it."""
     request = signed_request("POST", "/v1/layer-events", json.dumps(event).encode("utf-8"))
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with open_witness(request, timeout=10) as response:
             return response.status == 200
     except (urllib.error.URLError, OSError) as error:
         log(f"witness unreachable, will retry: {error}")
@@ -287,7 +306,7 @@ def check_restore_request():
     signed request, so no port on ct105 is opened.
     """
     try:
-        with urllib.request.urlopen(signed_request("GET", "/v1/restore-pending"), timeout=10) as response:
+        with open_witness(signed_request("GET", "/v1/restore-pending"), timeout=10) as response:
             pending = json.loads(response.read().decode("utf-8")).get("pending")
     except (urllib.error.URLError, OSError, ValueError) as error:
         log(f"restore check unavailable: {error}")
@@ -301,14 +320,15 @@ def check_restore_request():
         output = result.stdout.splitlines()
         layer1 = sum(1 for line in output if line.startswith("restored ") and "approved copy" in line)
         layer2 = sum(1 for line in output if line.startswith("restored transaction #"))
-        summary = f"Layer 1: {layer1} file(s) restored; Layer 2: {layer2} row(s) restored"
+        layer3 = sum(1 for line in output if line.startswith("restored config:"))
+        summary = f"Layer 1: {layer1} file(s) restored; Layer 2: {layer2} row(s) restored; Layer 3: {layer3} setting(s) restored"
         if not ok:
             summary = f"restore script exited {result.returncode}: " + (result.stderr.strip() or "see ct105 logs")
     except (OSError, subprocess.SubprocessError) as error:
         ok, summary = False, f"restore could not run: {error}"
     body = json.dumps({"id": pending["id"], "ok": ok, "summary": summary[:300]}).encode("utf-8")
     try:
-        with urllib.request.urlopen(signed_request("POST", "/v1/restore-ack", body), timeout=10):
+        with open_witness(signed_request("POST", "/v1/restore-ack", body), timeout=10):
             pass
         log(f"restore {'completed' if ok else 'failed'}: {summary}")
     except (urllib.error.URLError, OSError) as error:
@@ -325,11 +345,25 @@ def send_heartbeat():
     """
     body = json.dumps({"seq": int(time.time() * 1000), "interval_s": HEARTBEAT_S}).encode("utf-8")
     try:
-        with urllib.request.urlopen(signed_request("POST", "/v1/heartbeat", body), timeout=5):
+        with open_witness(signed_request("POST", "/v1/heartbeat", body), timeout=5):
             return True
     except (urllib.error.URLError, OSError) as error:
         log(f"heartbeat not delivered: {error}")
         return False
+
+
+# ---------- layer 3 ----------
+
+def layer3_trigger_reason():
+    """Why Layer 3 should respond right now, or None. Two causes: the approved witness link settings
+    changed, or this host has had no contact with the witness for QUARANTINE_AFTER_S."""
+    changes = config_guard.drift()
+    if changes:
+        return "approved witness link settings changed: " + ", ".join(change["item"] for change in changes)
+    silent = time.time() - _last_contact
+    if silent > QUARANTINE_AFTER_S:
+        return f"no contact with the witness for {int(silent)} s"
+    return None
 
 
 # ---------- main loop ----------
@@ -351,6 +385,10 @@ def run():
     last_armed, next_status_check = armed, time.time() + ARM_CHECK_S
     next_restore_check = time.time() + RESTORE_CHECK_S
     next_heartbeat = time.time()  # the first heartbeat goes out immediately
+    next_config_check = time.time() + CONFIG_CHECK_S
+    layer3_reason = None  # set while a quarantine is recorded, so it fires once per compromise
+    if config_guard.load_baseline() is None:
+        log("no approved witness link settings yet; run l3_config_guard.py approve to arm the config check")
     log(f"watching {WATCH_DIR} and spool {COMMANDS_SPOOL}; armed={armed} wrappers={count}")
 
     while True:
@@ -374,6 +412,16 @@ def run():
         if time.time() >= next_heartbeat:
             send_heartbeat()
             next_heartbeat = time.time() + HEARTBEAT_S
+        if time.time() >= next_config_check:
+            reason = layer3_trigger_reason()
+            if reason and not layer3_reason:
+                layer3_reason = reason
+                pending.append(l3_quarantine.run_dry(reason))  # a dry run: recorded, nothing executed
+                log(f"LAYER 3 (dry run): {reason}")
+            elif not reason and layer3_reason:
+                log("layer 3 conditions cleared; armed again")
+                layer3_reason = None
+            next_config_check = time.time() + CONFIG_CHECK_S
 
         still_pending = []
         for event in pending:

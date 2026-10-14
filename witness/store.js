@@ -21,6 +21,7 @@ export class WitnessStore {
     this.lastHeartbeatAt = null;       // ms; heartbeats are held in memory, not the ledger
     this.lastHeartbeatSeq = 0;
     this.lastContactAt = null;         // ms; any signed request from ct105 counts as contact
+    this.holderApprovals = new Set();  // key holders who approved the current quarantine (indexes)
     this.restoreRequest = null;        // one pending website restore, picked up by ct105
     this.lastRestoreRequestAt = 0;     // rate limit: one request per minute
     this.queue = Promise.resolve();

@@ -3,7 +3,10 @@
 import json
 import os
 import tempfile
+import time
 import unittest
+import urllib.error
+import urllib.request
 
 _dir = tempfile.mkdtemp(prefix="coc-l1-test-")
 os.environ.update({
@@ -107,6 +110,39 @@ class FileEventTests(unittest.TestCase):
         event = monitor.file_event("app.log", "changed-hash", approved, approved)
         self.assertEqual(event["state"], "normal")
         self.assertEqual(event["detail"]["result"], "restored")
+
+
+class Layer3TriggerTests(unittest.TestCase):
+    def setUp(self):
+        self.saved = (monitor.config_guard.drift, monitor._last_contact, monitor.CUT_FLAG)
+
+    def tearDown(self):
+        monitor.config_guard.drift, monitor._last_contact, monitor.CUT_FLAG = self.saved
+
+    def test_changed_witness_settings_trigger_layer3(self):
+        monitor.config_guard.drift = lambda: [{"item": "WITNESS_URL"}, {"item": "docker-compose.yml"}]
+        reason = monitor.layer3_trigger_reason()
+        self.assertIn("WITNESS_URL", reason)
+        self.assertIn("docker-compose.yml", reason)
+
+    def test_silence_triggers_layer3_only_past_the_threshold(self):
+        monitor.config_guard.drift = lambda: []
+        monitor._last_contact = time.time() - (monitor.QUARANTINE_AFTER_S + 5)
+        self.assertIn("no contact with the witness", monitor.layer3_trigger_reason())
+        monitor._last_contact = time.time()
+        self.assertIsNone(monitor.layer3_trigger_reason())
+
+    def test_simulated_cut_fails_every_witness_request_without_touching_the_network(self):
+        flag = os.path.join(_dir, "witness-cut")
+        monitor.CUT_FLAG = flag
+        request = urllib.request.Request("http://127.0.0.1:9/never-contacted")
+        open(flag, "w").close()
+        try:
+            with self.assertRaises(urllib.error.URLError) as caught:
+                monitor.open_witness(request, timeout=1)
+            self.assertIn("simulated network cut", str(caught.exception))
+        finally:
+            os.remove(flag)
 
 
 if __name__ == "__main__":

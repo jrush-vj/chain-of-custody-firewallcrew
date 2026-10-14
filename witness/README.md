@@ -162,6 +162,21 @@ not. Only `state: "alert"` events raise alerts. The Layer 1 card reads IDLE
 until `WITNESS_LAYER1_ENABLED=1` is set in the witness environment, which
 should happen only after the tripwire is installed on the monitored host.
 
+Heartbeats and Layer 3 also come from ct105's monitor, using the same signed requests:
+
+- `POST /v1/heartbeat` every 30 s (`WITNESS_HEARTBEAT_S`), whether or not anything is being tampered
+  with. Replays are rejected. After 3 missed beats (`WITNESS_HEARTBEAT_MISSED`) the witness raises a
+  Layer 2 `silence` alert, which clears when beats resume; the entry stays in the timeline. Heartbeats
+  are held in memory, not the ledger.
+- Layer 3 is a dry run. The monitor reports `quarantine:locked` with the plan it would follow (log out
+  accounts, restore the approved witness link settings, reboot) and executes none of it. It triggers when
+  the approved `WITNESS_URL`/`docker-compose.yml` on ct105 change, or after 45 s without contact
+  (`WITNESS_QUARANTINE_AFTER_S`). Without a report, the witness still presumes a quarantine after that
+  silence and marks it unconfirmed. Two key-holder approvals at `POST /quarantine/approve` record a release.
+- The website's "Restore to normal" button queues a fixed request (`POST /v1/restore-request`, one per
+  minute). ct105 polls for it with a signed request, runs `restore-normal.sh`, and acknowledges; a
+  successful restore resolves the earlier alerts, including Layer 3, and the timeline keeps the history.
+
 To update the Oracle witness from the repository's `main` branch, first check
 that the source checkout is clean. Do not discard local changes. Then run on
 Oracle:

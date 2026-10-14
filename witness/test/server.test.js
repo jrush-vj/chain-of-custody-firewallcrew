@@ -39,7 +39,7 @@ test('serves the cybersec auditor dashboard on the banking witness API', async (
     assert.equal(status.connection, 'waiting');
     assert.equal(status.state, 'unknown');
     assert.equal(status.checks.B, 'unknown');
-    assert.deepEqual(status.layers, { 1: 'off', 2: 'on', 3: 'off' });
+    assert.deepEqual(status.layers, { 1: 'off', 2: 'on', 3: 'on' });
     assert.equal(status.bank_reconciliation.checked_at, null);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
@@ -116,7 +116,7 @@ test('accepts authenticated prepare/commit and publishes a safe event view', asy
     assert.equal(auditorStatus.connection, 'connected');
     assert.equal(auditorStatus.checks.B, 'red');
     assert.equal(auditorStatus.checks.C, 'unknown');
-    assert.deepEqual(auditorStatus.layers, { 1: 'off', 2: 'on', 3: 'off' });
+    assert.deepEqual(auditorStatus.layers, { 1: 'off', 2: 'on', 3: 'on' });
     assert.equal(auditorStatus.bank_reconciliation.mismatch_count, 1);
 
     const alerts = await (await fetch(`${baseUrl}/alerts`)).json();
@@ -151,9 +151,8 @@ test('accepts authenticated prepare/commit and publishes a safe event view', asy
     });
     assert.equal(approval.status, 409);
     assert.deepEqual(await approval.json(), {
-      status: 'disabled',
-      dry_run: true,
-      reason: 'Layer 3 quarantine is not integrated; no system actions are available.'
+      status: 'nothing_to_release',
+      reason: 'No confirmed quarantine is waiting for approval'
     });
     assert.equal(store.status().record_count, 2);
 
@@ -486,6 +485,70 @@ ${body}`)
     assert.equal((await silenceAlerts()).length, 0, 'a new heartbeat clears the alert');
     const timeline = (await (await fetch(`${baseUrl}/timeline`)).json()).events;
     assert.ok(timeline.some((event) => event.trigger === 'heartbeat_silence' && event.resolved === true), 'history stays');
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('shows a dry-run quarantine from ct105, releases it on two approvals, and presumes one on silence', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-l3-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const getJson = async (route) => (await fetch(`${baseUrl}${route}`)).json();
+  const approve = (holder) => fetch(`${baseUrl}/quarantine/approve`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ holder })
+  });
+
+  try {
+    assert.equal((await getJson('/status')).quarantine.active, false);
+
+    await store.recordLayerEvent({
+      layer: 3,
+      trigger: 'quarantine:locked',
+      state: 'alert',
+      summary: 'Layer 3 dry run: approved witness link settings changed',
+      detail: {
+        quarantine_id: 'q-test-1',
+        reason: 'WITNESS_URL changed',
+        dry_run: true,
+        site_down: 'docker compose stop frontend',
+        lockout: 'end login sessions\nrevoke banking sessions\nreboot ct105'
+      },
+      who: {}
+    });
+    const status = await getJson('/status');
+    assert.equal(status.quarantine.active, true);
+    assert.equal(status.quarantine.confirmed, true);
+    assert.equal(status.quarantine.id, 'q-test-1');
+    const locked = (await getJson('/timeline')).events.find((event) => event.trigger === 'quarantine:locked');
+    assert.deepEqual(locked.detail.site_down, [{ cmd: 'docker compose stop frontend' }]);
+    assert.equal(locked.detail.lockout.length, 3);
+    assert.equal(locked.detail.dry_run, true);
+    assert.ok((await getJson('/alerts')).alerts.some((alert) => alert.kind === 'quarantine'));
+
+    assert.equal((await approve(7)).status, 400);
+    assert.equal((await approve(0)).status, 200);
+    assert.equal((await getJson('/status')).quarantine.holders[0].approved, true);
+    assert.equal((await approve(0)).status, 200, 'the same holder twice is still one approval');
+    assert.equal((await getJson('/status')).quarantine.active, true);
+    assert.equal((await approve(1)).status, 200);
+    const released = await getJson('/status');
+    assert.equal(released.quarantine.active, false, 'two holders release it');
+    assert.equal(released.quarantine.holders.every((holder) => !holder.approved), true);
+
+    store.lastContactAt = Date.now() - 60_000;
+    const presumed = (await getJson('/status')).quarantine;
+    assert.equal(presumed.active, true);
+    assert.equal(presumed.confirmed, false, 'presumed by the witness, not confirmed by the server');
+    store.lastContactAt = Date.now();
+    assert.equal((await getJson('/status')).quarantine.active, false, 'contact clears the presumption');
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });

@@ -200,7 +200,7 @@ function screen3() {
   const q = S.quarantine, last = events.filter((e) => e.layer === 3);
   if (!q || !q.active) {
     const rel = [...last].reverse().find((e) => e.trigger === "quarantine:released");
-    return `<h2>Layer 3 · Quarantine</h2><p class="sub">Not active. If the server loses contact with the witness for 45 s, it quarantines itself: evidence sealed locally, site down, every user logged out (root included), 2 of 3 key holders needed to unlock.</p>
+    return `<h2>Layer 3 · Quarantine</h2><p class="sub">Not active. If the banking server loses contact with the witness for ${(q && q.after) || 45} s, or its witness link settings change, Layer 3 responds. This is a dry run: the response is recorded and nothing is executed.</p>
     ${rel ? `<p class="sub">Last quarantine <b>${esc(rel.detail.quarantine_id)}</b> released at ${isoClock(rel.time)} after key-holder approval.</p>` : ""}`;
   }
   const lv = S.last_verified, approved = q.holders.filter((h) => h.approved).length;
@@ -212,13 +212,13 @@ function screen3() {
   const status = q.unlock_issued ? "Unlock signed by the witness. Waiting for the server to apply it…"
     : approved >= q.needed ? "Approvals complete. Unlock will be signed once the server reports in."
     : `${q.needed} of ${q.holders.length} approvals needed to unlock.`;
-  return `<p class="quar">Banking server has quarantined itself. All users logged out.</p>
-  <p class="sub">${q.confirmed ? `Server confirmed quarantine <b>${esc(q.id)}</b>.` : "Reported by the witness: the server's policy locks it down after " + q.after + " s without contact."} No contact since ${clock(q.since)}. The witness did not do the lockdown; the network was cut.</p>
+  return `<p class="quar">${q.confirmed ? (dry ? "Layer 3 triggered (dry run). No account was logged out." : "Banking server has quarantined itself.") : "The witness has lost contact with the banking server."}</p>
+  <p class="sub">${q.confirmed ? `Server confirmed quarantine <b>${esc(q.id)}</b>${acts.length && acts[0].detail.reason ? ": " + esc(acts[0].detail.reason) : ""}.` : "Reported by the witness: no contact with the server for over " + q.after + " s."} Since ${clock(q.since)}.</p>
   <div class="ev">
     <div class="stat"><div class="k">Verified and stored on witness</div><div class="v ok">#1 – #${lv ? lv.seq : 0}</div><div class="k">${lv ? "up to " + isoClock(lv.time) : ""}</div></div>
     <div class="stat"><div class="k">Unverified since cut</div><div class="v bad">${q.unverified == null ? "unknown" : q.unverified + " records"}</div><div class="k">${q.unverified == null ? "held on the server until the network is back" : "received after reconnect, being verified"}</div></div>
   </div>
-  ${actions.length ? `<h3 style="margin-top:20px">What the server did${dry ? ' <span class="empty">(dry run: recorded, not executed)</span>' : ""}</h3><ul class="feed cols">${actions.map((r) => `<li><span class="okc">✓</span> ${esc(r.cmd)}</li>`).join("")}</ul>` : ""}
+  ${actions.length ? `<h3 style="margin-top:20px">${dry ? "What Layer 3 would do" : "What the server did"}${dry ? ' <span class="empty">(dry run: recorded, nothing executed)</span>' : ""}</h3><ul class="feed cols">${actions.map((r) => `<li><span class="okc">${dry ? "•" : "✓"}</span> ${esc(r.cmd)}</li>`).join("")}</ul>` : ""}
   <h3 style="margin-top:20px">Key holders</h3>
   <table class="holders"><tbody>${holders}</tbody></table>
   <p class="need">${status}</p>`;
