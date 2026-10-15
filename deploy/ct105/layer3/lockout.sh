@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Demo Layer 3: push the demo account out, right now, without waiting for the automatic trigger.
-# Real action, scoped to the coc-demo-intruder account only (l3_lockout.py checks this independently
-# every time it runs: never root, never the account running this script, never a system account).
+# Trigger the configured Layer 3 mode immediately instead of waiting for the automatic trigger.
+# The default mode is demo-only. Full mode requires its explicit confirmation and all prerequisites.
 #
 # Run on ct105 as root:
 #   bash /opt/chain-of-custody/deploy/ct105/layer3/lockout.sh ["reason text"]

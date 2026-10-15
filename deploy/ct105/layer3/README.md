@@ -1,97 +1,126 @@
-# Layer 3: quarantine
+# Layer 3: quarantine and recovery
 
-Two things are built here, and they are deliberately separate:
+Layer 3 has two modes. The configuration selects the scope; `demo` is the default.
 
-1. **The full response** (`l3_quarantine.py`) — site down, every banking customer session revoked,
-   restore settings, reboot ct105 — stays a **dry run**. It is recorded and reported to the witness,
-   nothing is executed. This never changes regardless of what triggers it.
-2. **A real, narrow demonstration** (`l3_lockout.py`) — pushes one dedicated demo account out for
-   real: ends its login sessions and disables its login. It is hard-scoped to that one account and
-   can never touch root, your own login, or any other account, no matter what environment variable
-   is set or what triggers it (`resolve_demo_user()` checks this three independent ways every time
-   it runs; see `test_l3_lockout.py`'s `SafetyGuardTests`).
+| Mode | Effect |
+| --- | --- |
+| `demo` (default) | Locks only `coc-demo-intruder`, ends that account's login sessions, and uses the existing 2-of-3 demo keys. If the account is missing or unsafe, the monitor reports a dry run. |
+| `full` | Captures and seals evidence, stops the configured site service, creates `/etc/nologin`, locks every interactive login account including root, ends their login sessions, saves recovery state, and reports the quarantine event. It never reboots. |
 
-## One-time setup
+The full mode is off unless `COC_L3_MODE=full` **and**
+`COC_L3_FULL_CONFIRM=I_UNDERSTAND_ROOT_LOCKOUT` are both set. Full mode also refuses to run unless
+the break-glass account and full-mode unlock-key hashes are present. Keep the break-glass account
+in `COC_KEEP_ACCOUNTS`; the implementation also protects that account and the monitor account from
+the lockout.
+
+**Full mode has not been enabled or deployed on ct105.** The current Layer 1 systemd service runs as
+root, so the full-mode guard refuses to run there: the monitor must run under a separate non-root
+identity, and the full action must still have the required root privileges. Configure and test that
+operational setup on a clone before enabling the full confirmation. This change does not modify the
+systemd deployment or the banking application.
+
+## Demo mode setup and recovery
+
+On ct105, create the dedicated demo account:
 
 ```bash
 sudo bash setup-demo-account.sh
 ```
 
-Creates `coc-demo-intruder` (no sudo, uid >= 1000, password printed once). This is the *only* account
-the real lockout script will ever act on.
+The account has no administrative groups and is the only target in demo mode. In a second terminal,
+open a session as `coc-demo-intruder`, then trigger the lockout from the first terminal:
 
-## Demo flow
-
-Terminal A (ct105, as root):
-```bash
-# show the 3 fixed demo unlock keys ahead of time if you want to display them first
-bash generate-unlock-keys.sh
-
-# trigger the lockout directly (for a snappy demo, instead of waiting for the automatic trigger)
-bash lockout.sh "manual demo"
-```
-
-Terminal B (ct105, as the demo "intruder"), to have a session to actually push out:
 ```bash
 su - coc-demo-intruder
+# In the first terminal:
+sudo bash lockout.sh "manual demo"
 ```
-Running `lockout.sh` in Terminal A ends that session and disables the account's login; Terminal B
-gets dropped.
 
-Unlock, needs any 2 of the 3 printed keys:
+Generate the demo key file without printing key material to the terminal or monitor log:
+
 ```bash
-bash unlock.sh "SOC-7F3A-9C21-LEAD" "AUD-4B88-E015-CHEK"
+sudo bash generate-unlock-keys.sh /root/coc-layer3-demo-keys.txt
 ```
+
+The command prints SHA-256 hashes only. The file is mode `0600`; use the two required keys from that
+file to recover:
+
+```bash
+sudo bash unlock.sh "KEY-ONE" "KEY-TWO"
+```
+
+## Full-mode prerequisites
+
+1. Test the lockout and recovery on a disposable ct105 clone; see [RECOVERY.md](./RECOVERY.md) and
+   [TEST-ON-CLONE.md](./TEST-ON-CLONE.md). The recovery path must use the Proxmox console, not SSH
+   or the public witness website.
+2. Create the dedicated, non-admin break-glass account on the clone:
+
+   ```bash
+   sudo bash setup-break-glass.sh
+   ```
+
+   The generated long password is displayed once and is not saved in plaintext. The Linux shadow
+   database retains its password hash. Keep the account password login enabled and store the
+   password securely off-host; this account is exempt from full lockout.
+3. Generate the full-mode 2-of-3 keys to a protected file. The file contains the key material;
+   terminal output contains only hashes. Preserve a protected copy outside ct105:
+
+   ```bash
+   sudo env COC_L3_MODE=full bash generate-unlock-keys.sh /root/coc-layer3-full-keys.txt
+   ```
+
+   The implementation uses three independent random keys and accepts any two matching hashes; it
+   does not require `pycryptodome` or Shamir secret sharing.
+4. Configure the monitor environment only after the separate non-root monitor identity and
+   privileged full-action path have been implemented and verified on the clone:
+
+   ```ini
+   COC_L3_MODE=full
+   COC_L3_FULL_CONFIRM=I_UNDERSTAND_ROOT_LOCKOUT
+   COC_KEEP_ACCOUNTS=coc-break-glass
+   COC_L3_BREAK_GLASS_ACCOUNT=coc-break-glass
+   ```
+
+   The default site-down command is `docker compose -f <bank-compose-file> stop frontend`.
+   Override it with `COC_SITE_DOWN_CMD` only after reviewing the exact command. The state and
+   evidence directory defaults to `/var/lib/coc-layer3`; bank log hashing defaults to
+   `/var/log/bank-demo`.
 
 ## Automatic trigger
 
-`monitor.py` already runs on ct105 as a service watching for either cause: the approved witness link
-settings changing, or no contact with the witness for `QUARANTINE_AFTER_S` (default 45s) — the two
-causes `attack-layer3.sh config` / `attack-layer3.sh cut` simulate. When it fires, it calls
-`respond_to_layer3()`, which does the real demo-account lockout (same `l3_lockout.lock()` as above)
-and prints the 3 unlock keys to the monitor's log. Set `COC_LAYER3_REAL_LOCKOUT=0` in the monitor's
-environment to fall back to the pure dry-run report instead (e.g. on a host with no demo account set
-up yet — the monitor also falls back to the dry run by itself if the demo account is missing or unsafe,
-it never crashes or silently does nothing).
+The monitor's trigger is unchanged: an approved witness-link configuration change or no successful
+witness contact for `QUARANTINE_AFTER_S` seconds (default 45). In `demo`, this keeps the existing
+demo-account response. In `full`, the full action is attempted only with the exact confirmation and
+all prerequisites; a refusal is logged and reported as a dry run. No unlock key is printed to the
+monitor log.
 
-## What the witness page shows
+## Full-mode recovery
 
-The Layer 3 card plays a ~2 second "disconnecting" animation (a red sweep, "DISCONNECTING…", the top
-connection pill reading "NETWORK OFFLINE") the moment it first sees the quarantine, then settles on
-"QUARANTINED". The panel below lists what was really done (✓) separately from what is still only
-planned (•), and states plainly that only the demo account was touched.
+Website approvals are not accepted by the full lockout script. Approve buttons are votes only for
+the witness workflow; full-mode recovery requires running `unlock.sh` on ct105 from the Proxmox
+console or a usable break-glass session, with any two of the three full-mode keys:
 
-The page's own "Approve" buttons (2-of-3 holder clicks) are a **cosmetic record of a vote** — the
-witness cannot reach back into ct105 to unlock anything. For a real lockout, clicking them records
-the approval but says so explicitly; the account is only actually restored by running `unlock.sh` on
-ct105 with the real keys.
+```bash
+sudo bash unlock.sh "KEY-ONE" "KEY-TWO"
+```
 
-## The full response (every user, including root) — built, not enabled
+The script reads the saved full-lockout state, removes `/etc/nologin`, restores each account's
+previous password-lock and account-expiry state, and does not restart services. The saved state—not
+a newly discovered account list—is the source of accounts to restore. The banking frontend remains
+stopped for deliberate operator review. A failed lock or unlock action is recorded as partial and
+keeps the recovery pointer in place; use the evidence/state file and retry recovery rather than
+treating a partial result as success.
 
-`l3_full_lockout.py` implements the original design in full: `touch /etc/nologin`, `passwd -l` and
-`usermod --expiredate 1` for every configured user (default: auto-discovered from `/etc/passwd`,
-root plus every account with uid >= 1000 and a real shell — override with
-`COC_L3_FULL_USERS=root,alice,...`), every login session ended, and real site-down/site-up commands
-against the banking `docker-compose.yml`. It is a separate module from `l3_lockout.py` above:
-`monitor.py`'s automatic trigger never calls it, and `lockout.sh`/`unlock.sh` never touch it.
+## Witness and banking boundaries
 
-It is reachable only through `full-lockout.sh` / `full-unlock.sh`, and defaults to a dry run (prints
-every command, changes nothing). Running it for real needs `--real`, the environment variable
-`COC_I_HAVE_VERIFIED_RECOVERY=1`, and typing a confirmation phrase — all three, every time.
+Layer 3 reports through the existing monitor event path. This change does not modify the Cybersec
+submodule, the Node witness, Cloudflare configuration, or anything under `banking-system/`. The
+existing Cybersec witness approval implementation is therefore unchanged; do not treat its signed
+unlock workflow as the recovery path for this separate full-lockout mode.
 
-**Do not set that environment variable, or run `--real`, on ct105 before:**
-1. Reading [`RECOVERY.md`](./RECOVERY.md) — locking out root also removes SSH, and if the network
-   is cut too (the usual Layer 3 trigger), nothing gets you back in except a path that does not
-   depend on the guest's own network or login system.
-2. Following [`TEST-ON-CLONE.md`](./TEST-ON-CLONE.md) — clone ct105, lock the clone for real with
-   its network cut, confirm you can still get back in and unlock it, then destroy the clone.
-
-Only once both of those are actually done, not assumed, does enabling this on the real host make
-sense.
-
-## "Restore to normal"
-
-The website's "Restore to normal" button (via `monitor.py`'s poll of `/v1/restore-pending`) restores
-Layer 1 files, Layer 2 rows, and Layer 3's approved witness-link settings — but it does **not** touch
-the demo account's lock state. That is intentional: it would otherwise let anyone on the public page
-bypass the "needs 2 of 3 keys" demonstration with one click.
+The public witness cannot directly unlock ct105. The 2-of-3 website votes and the full-mode local
+keys are separate controls; only the local `unlock.sh` verifies the full-mode keys and restores the
+saved account state. The upstream Cybersec frontend is integrated unchanged; it does not currently
+display the local break-glass account status or this local recovery rule. Do not enable full mode
+until that UI limitation is resolved without changing the upstream source.

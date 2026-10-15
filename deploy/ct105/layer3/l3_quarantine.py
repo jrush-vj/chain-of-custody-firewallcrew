@@ -5,12 +5,12 @@ changed, or no contact with the witness for QUARANTINE_AFTER_S). The planned res
 
   1. take the public site down                         (recorded, not executed)
   2. log out every login session and banking session   (recorded, not executed; accounts stay
-                                                        unlocked, so everyone can log in again
-                                                        after the reboot)
+                                                        unlocked)
   3. restore the approved witness link settings        (recorded; the real restore runs from the
                                                         website's "Restore to normal" button)
   4. recreate the backend so it reconnects             (recorded, not executed)
-  5. reboot ct105                                      (recorded, not executed)
+
+No reboot or power-control command is part of the response.
 
 The only command run is `who`, read-only, to count the login sessions that would be logged out.
 Standard library only.
@@ -42,7 +42,6 @@ def build_plan(sessions):
         "log out every banking customer session (revoke all issued session tokens)",
         "restore the approved witness link settings (WITNESS_URL in banking-system/.env, docker-compose.yml)",
         "recreate the backend container so it reconnects to the witness",
-        "reboot ct105; users can log in again afterwards",
     ]
     return site_down, response
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unlock the demo account: needs 2 of the 3 printed demo keys. Re-enables its login for real.
+# Unlock the configured Layer 3 mode with any 2 of the 3 keys.
 #
 # Run on ct105 as root:
 #   bash /opt/chain-of-custody/deploy/ct105/layer3/unlock.sh "KEY-ONE" "KEY-TWO"
@@ -12,7 +12,7 @@ fi
 here="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "$#" -lt 2 ]; then
-  echo "usage: unlock.sh KEY KEY   (any 2 of the 3; run 'python3 $here/l3_lockout.py keys' to see them)"
+  echo "usage: unlock.sh KEY KEY   (any 2 of the 3; use the protected key file)"
   exit 2
 fi
 

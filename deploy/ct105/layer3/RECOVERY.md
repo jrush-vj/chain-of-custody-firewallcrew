@@ -1,54 +1,43 @@
-# Recovery path — read this before you ever run `full-lockout.sh --real`
+# Recovery path for a full Layer 3 lockout
 
-The full lockout can disable root. The condition that triggers Layer 3 in the first place is
-usually a network cut — which is also exactly when SSH access disappears. If both happen together
-and there is no way back in that works **without the guest's own network or login system**, the
-host stays locked, permanently, with no page or terminal that can undo it. This is not a
-hypothetical: `l3_full_lockout.py`'s whole job is to make that true.
+Full mode can lock root and creates `/etc/nologin`. If the witness network is also unavailable,
+SSH is not a recovery method. Do not enable full mode on ct105 until this path has been tested on a
+disposable clone.
 
-**Do not run `full-lockout.sh --real` or set `COC_I_HAVE_VERIFIED_RECOVERY=1` until the path below
-is actually tested**, on a clone (see `TEST-ON-CLONE.md`), not assumed.
+## Recovery from the Proxmox console
 
-## The path this setup already has: the Proxmox host
+ct105 is an LXC container. From the Proxmox host, enter the container directly:
 
-ct105 runs as an LXC container on a Proxmox host (seen in this project as `root@pve:~#`, entering
-the container with `pct enter 105`). That command attaches to the container's process namespace
-directly through the Proxmox host's container runtime — it is not a network login and does not go
-through the guest's sshd, PAM, `/etc/nologin`, or account lock state. In principle that means it
-keeps working even after `full-lockout.sh --real` has locked out root and cut `sshd` access inside
-the guest.
+```bash
+pct enter 105
+```
 
-**That "in principle" is exactly what must be verified, not trusted:**
+This path does not depend on ct105's SSH daemon, network, PAM, or interactive account status.
+Inside the container, use the protected copy of any two full-mode keys and run:
 
-1. Is the Proxmox host (`pve`) itself reachable on a network path that is independent of ct105's
-   own network — i.e. does cutting ct105's network (which is what triggers Layer 3) also cut your
-   path to `pve`? If `pve` is reachable only through the same uplink ct105 uses, this is not a real
-   recovery path.
-2. Who has credentials to `pve`, and is that access itself reliable (not, for example, behind a
-   VPN that routes through the same link)?
-3. Does `pct enter 105` actually still work after `full-lockout.sh --real` has run — confirmed by
-   testing it on a clone, with root really locked, not guessed from how LXC is documented to work.
+```bash
+cd /opt/chain-of-custody-firewallcrew/deploy/ct105/layer3
+COC_L3_MODE=full bash unlock.sh "KEY-ONE" "KEY-TWO"
+```
 
-## What "verified" means here
+`unlock.sh` verifies two distinct key hashes, reads the saved state file, removes `/etc/nologin`,
+and restores only the accounts recorded in that file. It restores the prior password-lock and
+account-expiry state. It does not restart the banking frontend or any other service.
 
-Before setting `COC_I_HAVE_VERIFIED_RECOVERY=1` anywhere, you should be able to say yes to all of:
+Keep the key file and break-glass password in a secure location outside ct105. The key generator
+prints hashes only, not key material. Website approvals do not replace the local two-key unlock.
 
-- [ ] I ran `full-lockout.sh --real` against a **clone** of ct105 (`TEST-ON-CLONE.md`), with its
-      network cut, and confirmed SSH into the clone stopped working and root was really locked.
-- [ ] From a session that does **not** depend on the clone's own network, I got back in — in this
-      setup, that means `pct enter <clone-id>` run from the Proxmox host itself, reached over a
-      path independent of the clone's network.
-- [ ] From that session, `full-unlock.sh --real` (or the manual commands it runs) actually restored
-      login.
-- [ ] I know exactly who has access to the Proxmox host today, and that it does not depend on ct105
-      or the clone being reachable.
+## Before relying on this path
 
-If any of those is unverified or "probably", the recovery path is unverified. Do not enable the
-full lockout on the real host.
+- Test entry with `pct enter` after a real full lockout on a disposable clone.
+- Test that two keys restore every saved account to its previous `passwd -S` and `chage -l` state.
+- Verify that the break-glass account remains available and that monitor/agent processes and their
+  parent processes were not terminated.
+- Ensure access to the Proxmox host itself does not depend on the network path being cut.
 
-## If there is no verified recovery path
+The installed monitor service currently runs as root. Full mode intentionally refuses to run when
+the monitor account is root; a separate non-root monitor identity with the required privileged
+full-action path must be configured and tested before full mode can execute automatically.
 
-Keep using the demo-account-only lockout (`lockout.sh` / `unlock.sh`) for anything live. It only
-ever touches one account that was created for this purpose, never root, and can always be reversed
-with the 2-of-3 keys from the same terminal session you're already in — it needs no recovery path
-because it never removes your own access in the first place.
+If any recovery step is uncertain, keep `COC_L3_MODE=demo` (the default). Demo mode only disables
+the dedicated `coc-demo-intruder` account and cannot lock out root.

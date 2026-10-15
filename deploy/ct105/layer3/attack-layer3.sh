@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Demo Layer 3: break the link between the bank and the witness and watch Layer 3 respond.
-# Layer 3 is a DRY RUN: it records "log out every account, restore the approved settings, reboot" and
+# Layer 3 is a DRY RUN: it records the configured quarantine response and
 # executes none of it. The settings are restored for real by the website's "Restore to normal" button.
 #
 #   config (default)  Changes WITNESS_URL in banking-system/.env to an address that cannot be reached and

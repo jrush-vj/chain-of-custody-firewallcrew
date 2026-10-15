@@ -69,7 +69,8 @@ git submodule update --init --recursive
 ```
 
 The Cybersec submodule remains pinned to upstream revision `73cfe0c` and is
-not modified. The Node witness serves its auditor UI and compatible live API
+not modified. The Node witness serves the integration-owned `witness/auditor.html`
+page (including its existing "Restore to normal" control) and compatible live API
 routes on the existing `127.0.0.1:8787` service. The dashboard's Layer 2
 live result is the existing comparison between committed witness events and
 the PostgreSQL-backed bank reconciliation endpoint.
@@ -115,9 +116,11 @@ public key, which can check a signature but not create one. Each seal also carri
 of the previous seal, so the records form a chain: changing one entry breaks every seal after it.
 
 **What the witness does.** It stores the seals (never passwords, never customer details), checks
-every signature and the chain, and asks the agent random questions — "what's record 42?", "what's
-account 2's balance?" — comparing the answer against its own sealed copy. A mismatch is reported
-with exactly what changed.
+every signature and the chain, and compares selected settled transaction IDs against the bank's
+read-only reconciliation endpoint. It checks fresh records, heartbeat-flagged suspects, and one
+random settled record every 30 seconds, within a 60-call/15-minute budget below the bank's
+100-call/IP limit. On the Layer 2 graph an up spike is the witness asking, a down spike is the bank
+answering, `?` means no answer, and heartbeats remain dots.
 
 **What "the platform locks itself down" means, and the two ways this is built here.** If the
 witness hasn't heard from the platform for 45 seconds, the platform assumes its own network was cut

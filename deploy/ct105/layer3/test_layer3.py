@@ -121,14 +121,17 @@ class QuarantineTests(unittest.TestCase):
             self.assertTrue(isinstance(value, (bool, int)) or (isinstance(value, str) and len(value) <= 4000))
         self.assertEqual(set(event), {"layer", "trigger", "state", "summary", "detail", "who"})
 
-    def test_plan_lists_logout_restore_and_reboot_but_executes_nothing_but_who(self):
+    def test_plan_lists_logout_and_restore_but_executes_nothing_but_who(self):
         event = l3.run_dry("no contact with the witness for 50 s", now=1792000001)
         actions = event["detail"]["lockout"].split("\n")
         joined = " ".join(actions + [event["detail"]["site_down"]])
         self.assertIn("log out every login session on ct105: 2 session(s)", joined)
         self.assertIn("log out every banking customer session", joined)
         self.assertIn("restore the approved witness link settings", joined)
-        self.assertIn("reboot ct105", joined)
+        self.assertNotIn("reboot", joined)
+        self.assertNotIn("shutdown", joined)
+        self.assertNotIn("poweroff", joined)
+        self.assertNotIn("halt", joined)
         self.assertNotIn("passwd", joined)
         self.assertNotIn("nologin", joined)
         self.assertEqual(self.commands, [["who"]], "only the read-only 'who' may run")
