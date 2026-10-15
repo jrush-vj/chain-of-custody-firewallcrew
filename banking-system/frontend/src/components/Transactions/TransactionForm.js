@@ -15,6 +15,11 @@ const TransactionForm = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+<<<<<<< HEAD
+=======
+  const [witnessPending, setWitnessPending] = useState(false);
+  const [witnessEventId, setWitnessEventId] = useState('');
+>>>>>>> firewallcrew-publish
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -34,30 +39,62 @@ const TransactionForm = () => {
     e.preventDefault();
     setError('');
     setSuccess('');
+<<<<<<< HEAD
+=======
+    setWitnessPending(false);
+    setWitnessEventId('');
+>>>>>>> firewallcrew-publish
     setLoading(true);
 
     try {
       const amount = parseFloat(formData.amount);
+<<<<<<< HEAD
 
       if (formData.type === 'deposit') {
         await apiClient.post('/api/transactions/deposit', {
+=======
+      let response;
+
+      if (formData.type === 'deposit') {
+        response = await apiClient.post('/api/transactions/deposit', {
+>>>>>>> firewallcrew-publish
           account_id: parseInt(formData.account_id),
           amount
         });
       } else if (formData.type === 'withdrawal') {
+<<<<<<< HEAD
         await apiClient.post('/api/transactions/withdraw', {
+=======
+        response = await apiClient.post('/api/transactions/withdraw', {
+>>>>>>> firewallcrew-publish
           account_id: parseInt(formData.account_id),
           amount
         });
       } else if (formData.type === 'transfer') {
+<<<<<<< HEAD
         await apiClient.post('/api/transactions/transfer', {
+=======
+        response = await apiClient.post('/api/transactions/transfer', {
+>>>>>>> firewallcrew-publish
           from_account_id: parseInt(formData.from_account_id),
           to_account_id: parseInt(formData.to_account_id),
           amount
         });
       }
 
+<<<<<<< HEAD
       setSuccess(`${formData.type.charAt(0).toUpperCase() + formData.type.slice(1)} successful!`);
+=======
+      const pending = response?.data?.witness_status !== 'confirmed';
+      setWitnessPending(pending);
+      setWitnessEventId(response?.data?.witness_event_id || '');
+      setSuccess(
+        response?.data?.message ||
+          (pending
+            ? response?.data?.error || 'Witness confirmation is pending. Do not retry blindly.'
+            : `${formData.type.charAt(0).toUpperCase() + formData.type.slice(1)} successful!`)
+      );
+>>>>>>> firewallcrew-publish
       setFormData({
         type: 'deposit',
         account_id: '',
@@ -65,10 +102,27 @@ const TransactionForm = () => {
         to_account_id: '',
         amount: ''
       });
+<<<<<<< HEAD
       setTimeout(() => {
         navigate('/transactions');
       }, 1500);
     } catch (err) {
+=======
+      if (!pending) {
+        setTimeout(() => {
+          navigate('/transactions');
+        }, 1500);
+      }
+    } catch (err) {
+      if (err.response?.data?.witness_status) {
+        setWitnessPending(true);
+        setWitnessEventId(err.response.data.witness_event_id || '');
+        setSuccess(
+          `${err.response.data.error || err.response.data.message || 'Transaction outcome is uncertain.'} Do not retry blindly.`
+        );
+        return;
+      }
+>>>>>>> firewallcrew-publish
       const errorMessage =
         err.response?.data?.error || err.response?.data?.errors?.[0]?.msg || err.message;
       setError(errorMessage || `Failed to process ${formData.type}`);
@@ -101,7 +155,16 @@ const TransactionForm = () => {
       </header>
 
       {error && <div className="error-message">{error}</div>}
+<<<<<<< HEAD
       {success && <div className="success-message">{success}</div>}
+=======
+      {success && (
+        <div className={witnessPending ? 'pending-message' : 'success-message'}>
+          {success}
+          {witnessPending && witnessEventId && <div>Witness event: {witnessEventId}</div>}
+        </div>
+      )}
+>>>>>>> firewallcrew-publish
 
       <section className="panel form-card">
         <form onSubmit={handleSubmit} className="transaction-form">

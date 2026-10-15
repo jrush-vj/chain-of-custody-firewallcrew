@@ -1,0 +1,14 @@
+[Unit]
+Description=Chain of Custody Layer 1 log monitor (reports changes to the witness)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/coc-layer1/monitor.env
+ExecStart=/usr/bin/python3 /opt/chain-of-custody/deploy/ct105/layer1/monitor.py run
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

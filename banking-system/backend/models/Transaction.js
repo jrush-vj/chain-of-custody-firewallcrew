@@ -10,8 +10,23 @@ export class Transaction {
     status = 'completed',
     options = {}
   ) {
+<<<<<<< HEAD
     const pool = getPool();
 
+=======
+    return this.createWithClient(getPool(), fromAccountId, toAccountId, amount, type, status, options);
+  }
+
+  static async createWithClient(
+    client,
+    fromAccountId,
+    toAccountId,
+    amount,
+    type,
+    status = 'completed',
+    options = {}
+  ) {
+>>>>>>> firewallcrew-publish
     if (type === 'deposit' && !options.external_from_name) {
       options.external_from_name = 'CASH IN';
     }
@@ -19,7 +34,11 @@ export class Transaction {
       options.external_to_name = 'CASH OUT';
     }
     
+<<<<<<< HEAD
     const result = await pool.query(
+=======
+    const result = await client.query(
+>>>>>>> firewallcrew-publish
       `INSERT INTO transactions (
         from_account_id,
         to_account_id,

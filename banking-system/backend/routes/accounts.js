@@ -1,8 +1,15 @@
 import express from 'express';
 import { Account } from '../models/Account.js';
+<<<<<<< HEAD
 import { Transaction } from '../models/Transaction.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { accountValidation } from '../middleware/validation.js';
+=======
+import { authenticateToken } from '../middleware/auth.js';
+import { accountValidation } from '../middleware/validation.js';
+import { executeWitnessedTransaction } from '../services/witnessedTransactions.js';
+import { getPool } from '../config/database.js';
+>>>>>>> firewallcrew-publish
 
 const router = express.Router();
 
@@ -130,7 +137,27 @@ router.delete('/:id', async (req, res, next) => {
     if (account.user_id !== req.user.id) {
       return res.status(403).json({ error: 'Access denied' });
     }
+<<<<<<< HEAD
     
+=======
+
+    const { rows: pendingWitnessEvents } = await getPool().query(
+      `SELECT 1
+       FROM witness_outbox o
+       JOIN transactions t ON t.id = o.transaction_id
+       WHERE o.status = 'pending'
+         AND (t.from_account_id = $1 OR t.to_account_id = $1)
+       LIMIT 1`,
+      [account.id]
+    );
+    if (pendingWitnessEvents.length) {
+      return res.status(202).json({
+        message: 'Account closure is blocked until its pending witness event is confirmed.',
+        witness_status: 'pending'
+      });
+    }
+
+>>>>>>> firewallcrew-publish
     const accountBalance = parseFloat(account.balance);
     const transferAccountId =
       req.body?.transfer_account_id || req.query?.transfer_account_id || null;
@@ -152,6 +179,7 @@ router.delete('/:id', async (req, res, next) => {
         return res.status(403).json({ error: 'Destination account not found or inaccessible' });
       }
 
+<<<<<<< HEAD
       const destinationNewBalance =
         parseFloat(destinationAccount.balance) + parseFloat(accountBalance);
       await Account.updateBalance(destinationAccount.id, destinationNewBalance);
@@ -167,6 +195,25 @@ router.delete('/:id', async (req, res, next) => {
           reference: 'Balance transfer before account closure'
         }
       );
+=======
+      const transfer = await executeWitnessedTransaction({
+        fromAccountId: account.id,
+        toAccountId: destinationAccount.id,
+        amount: account.balance,
+        type: 'transfer',
+        ownerUserId: req.user.id,
+        options: {
+          reference: 'Balance transfer before account closure'
+        }
+      });
+      if (transfer.pendingWitness) {
+        return res.status(202).json({
+          message: 'Balance transfer completed locally; witness confirmation is pending. Account closure was not completed.',
+          witness_status: 'pending',
+          witness_event_id: transfer.witnessEventId
+        });
+      }
+>>>>>>> firewallcrew-publish
     }
     
     const deleted = await Account.delete(req.params.id);
@@ -186,6 +233,9 @@ router.delete('/:id', async (req, res, next) => {
 
 export default router;
 
+<<<<<<< HEAD
 
 
 
+=======
+>>>>>>> firewallcrew-publish

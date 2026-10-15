@@ -15,6 +15,11 @@ export const errorHandler = (err, req, res, next) => {
 
   res.status(err.status || 500).json({
     error: err.message || 'Internal server error',
+<<<<<<< HEAD
+=======
+    ...(err.witnessEventId && { witness_event_id: err.witnessEventId }),
+    ...(err.witnessStatus && { witness_status: err.witnessStatus }),
+>>>>>>> firewallcrew-publish
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 };
@@ -25,4 +30,7 @@ export const notFoundHandler = (req, res) => {
 
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> firewallcrew-publish

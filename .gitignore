@@ -33,3 +33,8 @@ build/
 .idea/
 .DS_Store
 Thumbs.db
+<<<<<<< HEAD
+=======
+.claude/settings.local.json
+graphify-out/
+>>>>>>> firewallcrew-publish

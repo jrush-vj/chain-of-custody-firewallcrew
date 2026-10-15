@@ -1,0 +1,28 @@
+[Unit]
+Description=Chain of Custody transaction witness
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=banking-witness
+Group=banking-witness
+EnvironmentFile=/etc/banking-witness/witness.env
+WorkingDirectory=/opt/banking-witness
+ExecStart=/usr/bin/node /opt/banking-witness/server.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/banking-witness
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+UMask=0077
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

@@ -37,7 +37,12 @@
 }
 
 .error-message,
+<<<<<<< HEAD
 .success-message {
+=======
+.success-message,
+.pending-message {
+>>>>>>> firewallcrew-publish
   border-radius: 16px;
   padding: 0.85rem 1rem;
   margin-bottom: 1.5rem;
@@ -56,6 +61,15 @@
   color: #e4fff1;
 }
 
+<<<<<<< HEAD
+=======
+.pending-message {
+  background: rgba(255, 193, 92, 0.14);
+  border: 1px solid rgba(255, 193, 92, 0.4);
+  color: #ffe5b5;
+}
+
+>>>>>>> firewallcrew-publish
 .empty-state {
   text-align: center;
   color: var(--text-muted);

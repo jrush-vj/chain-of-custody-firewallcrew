@@ -9,9 +9,28 @@ import {
   externalOutgoingValidation
 } from '../middleware/validation.js';
 import { requireExternalApiKey } from '../middleware/externalApiKey.js';
+<<<<<<< HEAD
 
 const router = express.Router();
 
+=======
+import { executeWitnessedTransaction } from '../services/witnessedTransactions.js';
+import { getPool } from '../config/database.js';
+
+const router = express.Router();
+
+const sendTransactionResult = (res, result, message, details = {}) =>
+  res.status(result.pendingWitness ? 202 : 201).json({
+    message: result.pendingWitness
+      ? `${message} The transaction is recorded locally; witness confirmation is pending. Do not retry blindly.`
+      : message,
+    witness_status: result.pendingWitness ? 'pending' : 'confirmed',
+    witness_event_id: result.witnessEventId,
+    transaction: result.transaction,
+    ...details
+  });
+
+>>>>>>> firewallcrew-publish
 /**
  * @swagger
  * /api/transactions/external/incoming:
@@ -49,6 +68,11 @@ const router = express.Router();
  *     responses:
  *       201:
  *         description: Incoming payment registered
+<<<<<<< HEAD
+=======
+ *       202:
+ *         description: Payment recorded locally; witness confirmation is pending
+>>>>>>> firewallcrew-publish
  */
 router.post(
   '/external/incoming',
@@ -62,6 +86,7 @@ router.post(
         return res.status(404).json({ error: 'Destination account not found for provided IBAN' });
       }
 
+<<<<<<< HEAD
       const newBalance = parseFloat(account.balance) + parseFloat(amount);
       await Account.updateBalance(account.id, newBalance);
 
@@ -72,16 +97,29 @@ router.post(
         'external_incoming',
         'completed',
         {
+=======
+      const result = await executeWitnessedTransaction({
+        toAccountId: account.id,
+        amount,
+        type: 'external_incoming',
+        options: {
+>>>>>>> firewallcrew-publish
           external_from_name: sender_name,
           external_from_iban: iban,
           reference
         }
+<<<<<<< HEAD
       );
 
       res.status(201).json({
         message: 'Incoming payment recorded',
         transaction,
         new_balance: newBalance
+=======
+      });
+      return sendTransactionResult(res, result, 'Incoming payment recorded', {
+        new_balance: result.toBalance
+>>>>>>> firewallcrew-publish
       });
     } catch (error) {
       next(error);
@@ -89,6 +127,43 @@ router.post(
   }
 );
 
+<<<<<<< HEAD
+=======
+router.get('/witness-reconcile', async (req, res, next) => {
+  try {
+    const rawIds = req.query.transaction_ids;
+    if (typeof rawIds !== 'string') {
+      return res.status(400).json({ error: 'transaction_ids is required' });
+    }
+    const ids = rawIds.split(',').map((value) => Number(value));
+    if (
+      ids.length < 1 ||
+      ids.length > 100 ||
+      ids.some((id) => !Number.isSafeInteger(id) || id <= 0) ||
+      new Set(ids).size !== ids.length
+    ) {
+      return res.status(400).json({ error: 'transaction_ids must contain 1 to 100 unique positive integers' });
+    }
+
+    const { rows } = await getPool().query(
+      `SELECT t.id AS transaction_id,
+              t.type,
+              (t.amount * 100)::bigint AS amount_minor,
+              o.event_id
+       FROM transactions t
+       JOIN witness_outbox o ON o.transaction_id = t.id
+       WHERE t.id = ANY($1::int[])
+         AND o.status = 'confirmed'`,
+      [ids]
+    );
+    res.set('Cache-Control', 'no-store');
+    return res.json({ transactions: rows });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+>>>>>>> firewallcrew-publish
 router.use(authenticateToken);
 
 /**
@@ -182,6 +257,11 @@ router.get('/', async (req, res, next) => {
  *     responses:
  *       201:
  *         description: Deposit successful
+<<<<<<< HEAD
+=======
+ *       202:
+ *         description: Deposit recorded locally; witness confirmation is pending
+>>>>>>> firewallcrew-publish
  */
 router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
   try {
@@ -191,6 +271,7 @@ router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
       return res.status(400).json({ error: 'Account ID is required' });
     }
 
+<<<<<<< HEAD
     const account = await Account.findById(parseInt(account_id));
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
@@ -211,6 +292,17 @@ router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
       message: 'Deposit successful',
       transaction,
       new_balance: newBalance
+=======
+    const result = await executeWitnessedTransaction({
+      toAccountId: account_id,
+      amount,
+      type: 'deposit',
+      ownerUserId: req.user.id,
+      options: { external_from_name: 'CASH IN' }
+    });
+    return sendTransactionResult(res, result, 'Deposit successful', {
+      new_balance: result.toBalance
+>>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);
@@ -242,6 +334,11 @@ router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
  *     responses:
  *       201:
  *         description: Withdrawal successful
+<<<<<<< HEAD
+=======
+ *       202:
+ *         description: Withdrawal recorded locally; witness confirmation is pending
+>>>>>>> firewallcrew-publish
  *       400:
  *         description: Insufficient funds
  */
@@ -253,6 +350,7 @@ router.post('/withdraw', depositWithdrawValidation, async (req, res, next) => {
       return res.status(400).json({ error: 'Account ID is required' });
     }
 
+<<<<<<< HEAD
     const account = await Account.findById(parseInt(account_id));
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
@@ -280,6 +378,17 @@ router.post('/withdraw', depositWithdrawValidation, async (req, res, next) => {
       message: 'Withdrawal successful',
       transaction,
       new_balance: newBalance
+=======
+    const result = await executeWitnessedTransaction({
+      fromAccountId: account_id,
+      amount,
+      type: 'withdrawal',
+      ownerUserId: req.user.id,
+      options: { external_to_name: 'CASH OUT' }
+    });
+    return sendTransactionResult(res, result, 'Withdrawal successful', {
+      new_balance: result.fromBalance
+>>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);
@@ -320,11 +429,17 @@ router.post('/withdraw', depositWithdrawValidation, async (req, res, next) => {
  *     responses:
  *       201:
  *         description: External payment initiated
+<<<<<<< HEAD
+=======
+ *       202:
+ *         description: Payment recorded locally; witness confirmation is pending
+>>>>>>> firewallcrew-publish
  */
 router.post('/external/outgoing', externalOutgoingValidation, async (req, res, next) => {
   try {
     const { from_account_id, recipient_name, recipient_iban, amount, reference } = req.body;
 
+<<<<<<< HEAD
     const account = await Account.findById(from_account_id);
     if (!account || account.user_id !== req.user.id) {
       return res.status(403).json({ error: 'Source account not found or inaccessible' });
@@ -349,16 +464,30 @@ router.post('/external/outgoing', externalOutgoingValidation, async (req, res, n
       'external_outgoing',
       'completed',
       {
+=======
+    const result = await executeWitnessedTransaction({
+      fromAccountId: from_account_id,
+      amount,
+      type: 'external_outgoing',
+      ownerUserId: req.user.id,
+      options: {
+>>>>>>> firewallcrew-publish
         external_to_name: recipient_name,
         external_to_iban: recipient_iban,
         reference
       }
+<<<<<<< HEAD
     );
 
     res.status(201).json({
       message: 'Payment sent successfully',
       transaction,
       new_balance: newBalance
+=======
+    });
+    return sendTransactionResult(res, result, 'Payment sent successfully', {
+      new_balance: result.fromBalance
+>>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);
@@ -393,6 +522,11 @@ router.post('/external/outgoing', externalOutgoingValidation, async (req, res, n
  *     responses:
  *       201:
  *         description: Transfer successful
+<<<<<<< HEAD
+=======
+ *       202:
+ *         description: Transfer recorded locally; witness confirmation is pending
+>>>>>>> firewallcrew-publish
  *       400:
  *         description: Insufficient funds or invalid accounts
  */
@@ -400,6 +534,7 @@ router.post('/transfer', transferValidation, async (req, res, next) => {
   try {
     const { from_account_id, to_account_id, amount } = req.body;
 
+<<<<<<< HEAD
     if (from_account_id === to_account_id) {
       return res.status(400).json({ error: 'Cannot transfer to the same account' });
     }
@@ -435,6 +570,22 @@ router.post('/transfer', transferValidation, async (req, res, next) => {
       transaction,
       from_account_balance: fromNewBalance,
       to_account_balance: toNewBalance
+=======
+    if (Number(from_account_id) === Number(to_account_id)) {
+      return res.status(400).json({ error: 'Cannot transfer to the same account' });
+    }
+
+    const result = await executeWitnessedTransaction({
+      fromAccountId: from_account_id,
+      toAccountId: to_account_id,
+      amount,
+      type: 'transfer',
+      ownerUserId: req.user.id
+    });
+    return sendTransactionResult(res, result, 'Transfer successful', {
+      from_account_balance: result.fromBalance,
+      to_account_balance: result.toBalance
+>>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);

@@ -16,6 +16,10 @@ import transactionRoutes from './routes/transactions.js';
 import scheduledPaymentRoutes from './routes/scheduledPayments.js';
 import paymentPortalRoutes from './routes/paymentPortal.js';
 import { sanitizeRequest } from './middleware/sanitize.js';
+<<<<<<< HEAD
+=======
+import { startWitnessOutboxRetry } from './services/witnessedTransactions.js';
+>>>>>>> firewallcrew-publish
 
 dotenv.config();
 
@@ -81,6 +85,10 @@ const startServer = async () => {
   try {
     await connectDB();
     await createTables();
+<<<<<<< HEAD
+=======
+    startWitnessOutboxRetry();
+>>>>>>> firewallcrew-publish
     
     // Check if SSL is enabled
     if (process.env.USE_SSL === 'true') {
@@ -133,4 +141,7 @@ process.on('SIGINT', async () => {
 startServer();
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> firewallcrew-publish

@@ -4,6 +4,12 @@ import { Transaction } from '../models/Transaction.js';
 
 export const seedDatabase = async () => {
   try {
+<<<<<<< HEAD
+=======
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('Database seeding is disabled in production');
+    }
+>>>>>>> firewallcrew-publish
     console.log('Seeding database...');
 
     // Create test users
@@ -53,4 +59,7 @@ export const seedDatabase = async () => {
 
 
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> firewallcrew-publish

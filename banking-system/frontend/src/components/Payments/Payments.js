@@ -8,6 +8,11 @@ const Payments = () => {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+<<<<<<< HEAD
+=======
+  const [witnessPending, setWitnessPending] = useState(false);
+  const [witnessEventId, setWitnessEventId] = useState('');
+>>>>>>> firewallcrew-publish
   const [formData, setFormData] = useState({
     from_account_id: '',
     recipient_name: '',
@@ -48,6 +53,7 @@ const Payments = () => {
     setSubmitting(true);
     setError('');
     setSuccess('');
+<<<<<<< HEAD
 
     try {
       await apiClient.post('/api/transactions/external/outgoing', {
@@ -55,6 +61,25 @@ const Payments = () => {
         amount: parseFloat(formData.amount)
       });
       setSuccess('Payment sent successfully.');
+=======
+    setWitnessPending(false);
+    setWitnessEventId('');
+
+    try {
+      const response = await apiClient.post('/api/transactions/external/outgoing', {
+        ...formData,
+        amount: parseFloat(formData.amount)
+      });
+      const pending = response.data.witness_status !== 'confirmed';
+      setWitnessPending(pending);
+      setWitnessEventId(response.data.witness_event_id || '');
+      setSuccess(
+        response.data.message ||
+          (pending
+            ? 'Payment recorded; witness confirmation is pending. Do not submit again.'
+            : 'Payment sent successfully.')
+      );
+>>>>>>> firewallcrew-publish
       setFormData((prev) => ({
         ...prev,
         recipient_name: '',
@@ -62,8 +87,23 @@ const Payments = () => {
         amount: '',
         reference: ''
       }));
+<<<<<<< HEAD
       setTimeout(() => setSuccess(''), 4000);
     } catch (err) {
+=======
+      if (!pending) {
+        setTimeout(() => setSuccess(''), 4000);
+      }
+    } catch (err) {
+      if (err.response?.data?.witness_status) {
+        setWitnessPending(true);
+        setWitnessEventId(err.response.data.witness_event_id || '');
+        setSuccess(
+          `${err.response.data.error || err.response.data.message || 'Payment outcome is uncertain.'} Do not retry blindly.`
+        );
+        return;
+      }
+>>>>>>> firewallcrew-publish
       setError(err.response?.data?.error || 'Failed to send payment');
     } finally {
       setSubmitting(false);
@@ -80,7 +120,16 @@ const Payments = () => {
         <h1>External Payments</h1>
       </div>
       {error && <div className="error-message">{error}</div>}
+<<<<<<< HEAD
       {success && <div className="success-message">{success}</div>}
+=======
+      {success && (
+        <div className={witnessPending ? 'pending-message' : 'success-message'}>
+          {success}
+          {witnessPending && witnessEventId && <div>Witness event: {witnessEventId}</div>}
+        </div>
+      )}
+>>>>>>> firewallcrew-publish
 
       {accounts.length === 0 ? (
         <div className="empty-state">
