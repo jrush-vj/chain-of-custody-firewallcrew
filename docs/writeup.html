@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chain of Custody: Technical Write-up</title>
+<style>
+  @page { size: A4; margin: 13mm 14mm; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 8.9pt; line-height: 1.34; color: #111; margin: 0; }
+  h1 { font-size: 15pt; margin: 0 0 1px; }
+  .sub { color: #444; margin: 0 0 6px; font-size: 8.5pt; }
+  h2 { font-size: 10pt; margin: 8px 0 3px; border-bottom: 1px solid #bbb; padding-bottom: 1px; }
+  p { margin: 2px 0 4px; }
+  ul { margin: 2px 0 4px 15px; padding: 0; }
+  li { margin: 1px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 8.2pt; margin: 3px 0 4px; }
+  th, td { border: 1px solid #bbb; padding: 2px 4px; vertical-align: top; text-align: left; }
+  th { background: #eceff3; }
+  .w { color: #0a6b2a; font-weight: bold; }
+  .p { color: #9a5b00; font-weight: bold; }
+  .n { color: #a11d1d; font-weight: bold; }
+  svg { width: 100%; height: auto; display: block; margin: 4px 0; }
+  .small { font-size: 7.8pt; color: #333; }
+</style>
+</head>
+<body>
+
+<h1>Chain of Custody: Technical Write-up</h1>
+<p class="sub">Hackurity 2026, PS-6 (Track C). Firewall Crew: Jeevika, Jerush, Jaganath. Status key: <span class="w">working</span> = demonstrated in code and tests; <span class="p">partial</span> = some of it works; <span class="n">not done</span> = not built.</p>
+
+<h2>1. Problem and scope</h2>
+<p>Anyone with admin root on a log host can edit, truncate or silence the logs, and a SIEM that stores what it receives cannot tell. Logs used as evidence (banking, audit, incident response) then prove nothing. We protect one banking application running on ct105-ai, with a separate witness service on an Oracle VPS that keeps its own copy of the evidence. In scope: the attacks in the coverage map (section 2). Out of scope: the SIEM vendor, production hardening, and edits made before the first ship.</p>
+
+<h2>2. Approach and architecture</h2>
+<p>Assume each layer can fall; the next still catches the attack. Alerts appear only on the witness, never on the attacked host.</p>
+<svg viewBox="0 0 680 150" xmlns="http://www.w3.org/2000/svg" font-family="Arial" font-size="11">
+  <rect x="5" y="10" width="200" height="130" rx="6" fill="#f4f6f9" stroke="#556"/>
+  <text x="15" y="30" font-weight="bold">ct105-ai (attacked host)</text>
+  <rect x="15" y="40" width="180" height="26" rx="4" fill="#fff" stroke="#2b6cb0"/><text x="25" y="57">L1 wrappers + monitor</text>
+  <rect x="15" y="74" width="180" height="26" rx="4" fill="#fff" stroke="#2b6cb0"/><text x="25" y="91">L2 heartbeat + row copies</text>
+  <rect x="15" y="108" width="180" height="26" rx="4" fill="#fff" stroke="#c05621"/><text x="25" y="125">L3 lockout (demo account)</text>
+  <rect x="250" y="10" width="200" height="130" rx="6" fill="#0f1b2d" stroke="#0f1b2d"/>
+  <text x="260" y="30" font-weight="bold" fill="#fff">Witness (Oracle VPS, Node)</text>
+  <rect x="260" y="40" width="180" height="26" rx="4" fill="#1e3a5f"/><text x="270" y="57" fill="#fff">hash-chained ledger (JSONL)</text>
+  <rect x="260" y="74" width="180" height="26" rx="4" fill="#1e3a5f"/><text x="270" y="91" fill="#fff">reconciliation vs row copies</text>
+  <rect x="260" y="108" width="180" height="26" rx="4" fill="#1e3a5f"/><text x="270" y="125" fill="#fff">alerts + auditor dashboard</text>
+  <line x1="205" y1="53" x2="250" y2="53" stroke="#2b6cb0" stroke-width="2"/>
+  <line x1="205" y1="87" x2="250" y2="87" stroke="#2b6cb0" stroke-width="2"/>
+  <text x="212" y="45" font-size="9">events</text>
+  <text x="208" y="80" font-size="9">heartbeat</text>
+  <rect x="475" y="10" width="200" height="130" rx="6" fill="#fff" stroke="#999"/>
+  <text x="485" y="30" font-weight="bold">Attacker (admin root on ct105)</text>
+  <text x="485" y="50" font-size="10">Can edit DB, logs, wrappers.</text>
+  <text x="485" y="66" font-size="10">Cannot SSH to the witness.</text>
+  <text x="485" y="82" font-size="10">Holds the HMAC secret (known</text>
+  <text x="485" y="96" font-size="10">limit: root on ct105 can read it).</text>
+  <line x1="475" y1="75" x2="455" y2="75" stroke="#c53030" stroke-dasharray="4 3"/>
+</svg>
+<p>Layer 1 (<span class="p">partial</span>) detects raw edits to the log path by wrapping the commands an admin would use (rm, sed, vi, truncate) and forwards each attempt to the witness. It does not block. Layer 2 (<span class="w">working</span>) has two parts: a heartbeat that raises a silence alert after missed beats, and a SHA-256 hash chain on the witness copy that rejects a modified ledger. Bank rows are compared against the witness's copies. Layer 3 (<span class="p">partial</span>) locks a single demo account; a full root lockout is built but gated and not enabled.</p>
+
+<table>
+  <tr><th style="width:26%">Coverage claim (attack)</th><th style="width:16%">Status</th><th>What is built, and where to see it</th></tr>
+  <tr><td>Raw rm / sed / truncate on the log</td><td class="p">Partial</td><td>Detection only; wrappers log the attempt and the command still runs. <code>deploy/ct105/layer1/</code>. Not built: command allowlist, append-only attribute (chattr +a).</td></tr>
+  <tr><td>Kill the agent / network cut (silence)</td><td class="w">Working</td><td>30 s heartbeat (15 to 120 s adaptive); the witness alerts after missed beats. <code>witness/server.js</code>, heartbeat tests in <code>witness/test/</code>. Not built: random jitter, per-beat nonce.</td></tr>
+  <tr><td>Edit a committed record</td><td class="w">Working</td><td>SHA-256 prev_hash chain; a modified record is rejected on startup (<code>store.test.js</code>). Not built: per-entry HMAC tag and forward-secure key ratchet.</td></tr>
+  <tr><td>Change amount / type / status in the bank DB</td><td class="w">Working</td><td>Reconciliation against witness row copies, with bounded random rechecks (<code>witness/reconcile.js</code>, <code>bank-recheck.test.js</code>). Demo: <code>deploy/ct105/layer2/attack-layer2.sh</code>, reversible with <code>restore-layer2.sh</code>.</td></tr>
+  <tr><td>Confirmed tampering (lockout)</td><td class="p">Partial</td><td>Demo mode locks one account and unlocks with 2 of 3 demo keys (hash-checked, not Shamir). Full root lockout: built, gated, not enabled on ct105. <code>deploy/ct105/layer3/</code>.</td></tr>
+  <tr><td>Seal on silence</td><td class="n">Not done</td><td>Witness quarantine on a broken link runs as a dry run only.</td></tr>
+  <tr><td>Auditor dashboard</td><td class="w">Working</td><td>Shows layer events, heartbeats, reconciliation, and "Restore to normal". <code>witness/auditor.html</code>, served at the witness root.</td></tr>
+</table>
+
+<h2>4. Stretch objectives</h2>
+<p>We claim no stretch objective as working. The pitch deck describes a command gate, a 2-of-3 Shamir unlock, forward-secure keys and nonce heartbeats. These are the target design; none of them is built, and none is shown in the demo. The cybersec detector UI is served through the witness (<span class="p">partial</span>), but its upstream repository has no licence, so it is not redistributed here without permission.</p>
+
+<h2>5. Threat and user model</h2>
+<p>Attacker: admin root on ct105 (edits the database, the logs, the wrappers, the monitor), with no shell on the witness. User: a SOC analyst or auditor who reads the witness dashboard and trusts it because the witness keeps the copy the attacker cannot change.</p>
+
+<h2>6. Assumptions</h2>
+<ul>
+  <li>The witness host is not compromised and its clock is correct.</li>
+  <li>The HMAC secret shared with ct105 stays confidential. Root on ct105 can read it, so a root attacker can forge new events. This is stated, not solved.</li>
+  <li>ct105 sends the witness its rows and heartbeats; an edit made before the first send is not caught (a known limit, section 8).</li>
+</ul>
+
+<h2>7. Evidence</h2>
+<ul>
+  <li>Witness unit tests: 33 of 33 pass (<code>node --test</code>, Node 24.15.0, 15 Oct 2026). Covers the hash chain, startup rejection, reconciliation, heartbeat timing and clamping, and back-off.</li>
+  <li>Heartbeat interval: default 30 s, clamped to 15 to 120 s (unit test).</li>
+  <li>Layer 2 demo: three attacks (amount, type, status). Timings in the demo script comments are design targets (about 10 s for the four-field check, the next 30 s heartbeat for status). <span class="n">We have not measured detection latency end to end.</span></li>
+  <li>Python tests under <code>deploy/ct105/</code> (Layer 1, Layer 2, Layer 3) exist but were <span class="n">not run</span> for this write-up.</li>
+  <li>No false-positive rate or load test has been measured.</li>
+</ul>
+
+<h2>8. Known limitations and next steps</h2>
+<ul>
+  <li>Layer 1 detects but does not block. Next: an allowlist wrapper and an append-only attribute on the log file.</li>
+  <li>The HMAC secret is shared with ct105, so root on ct105 can forge events. Next: per-entry signing with forward-secure keys.</li>
+  <li>An edit before the first ship is not caught. Next: witness the outbox copy at write time.</li>
+  <li>Full Layer 3 lockout is not enabled on ct105. It needs a non-root monitor identity first.</li>
+  <li>The pitch deck's coverage map and architecture show the target design. The build differs as listed in section 3, and the demo shows only what is marked working or partial.</li>
+  <li>Not yet verified on a clean machine (the README run steps are untested by a teammate).</li>
+</ul>
+
+<h2>AI tools used</h2>
+<p class="small">Claude Code (Anthropic): code, tests and documentation. GitHub Copilot: code completion. Commit trailers show Claude Haiku 5.5, Claude Sonnet 5 and Claude Sonnet 5.5. The team designed the architecture and can explain every part.</p>
+
+</body>
+</html>
