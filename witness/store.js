@@ -47,6 +47,9 @@ export class WitnessStore {
     this.integrityError = null;
     this.lastSuccessfulReconciliationAt = null;
     this.bankFindings = new Map();
+    // Record ids a heartbeat asked the bank to re-check (a suspect, or a finding whose row is back).
+    // An id stays here until the bank gives a definitive answer, so a budget or back-off skip is retried.
+    this.bankPendingIds = new Set();
     this.bankPassedIds = new Set();
     this.bankCallLog = [];
     this.bank429Log = [];

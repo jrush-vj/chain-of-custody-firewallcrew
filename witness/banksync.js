@@ -80,6 +80,9 @@ export const evaluateHeartbeat = async (store, bank, nowMs = Date.now()) => {
   }
 
   const suspects = [];
+  // Rows that match their copy again while the bank check still has a finding against them: the bank
+  // must confirm the recovery, because a stale finding would keep the page red.
+  const recheck = [];
   for (const [id, hash] of view.sweep) {
     store.currentHashes.set(id, { hash, at: nowMs });
     const copy = store.copies.get(id);
@@ -91,6 +94,7 @@ export const evaluateHeartbeat = async (store, bank, nowMs = Date.now()) => {
       if (store.openEvidence('entry_edited', id)) {
         await resolve(store, 'entry_edited', id, 'the bank row matches its copy again');
       }
+      if (store.bankFindings.has(id)) recheck.push(id);
     }
   }
 
@@ -107,11 +111,18 @@ export const evaluateHeartbeat = async (store, bank, nowMs = Date.now()) => {
     }
   }
 
+  // A 'missing' finding whose row has come back also needs the bank to confirm it.
+  for (const [id, finding] of store.bankFindings) {
+    if (finding.issue === 'missing' && view.present.has(id) && !recheck.includes(id)) recheck.push(id);
+  }
+
+  for (const id of [...suspects, ...recheck]) store.bankPendingIds.add(id);
+
   await checkUnwitnessed(store, nowMs);
   await markBaselineComplete(store, view.present);
 
   const need = [...missingCopies(store, view.present), ...suspects].slice(0, NEED_LIMIT);
-  return { ...syncReply(store, need), suspect_ids: suspects };
+  return { ...syncReply(store, need), suspect_ids: suspects, recheck_ids: recheck };
 };
 
 // Rows with no witnessed commit are a row that reached the database without going through the bank's
