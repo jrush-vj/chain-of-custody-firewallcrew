@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WitnessStore } from './store.js';
-import { startBankReconciliation, startChallenges } from './reconcile.js';
+import { checkBankRows, startChallenges } from './reconcile.js';
 import { amountMinor } from './records.js';
 import { evaluateHeartbeat, evidenceMismatches, receiveRows, recordCounts } from './banksync.js';
 
@@ -17,8 +17,7 @@ const maxBodyBytes = 16 * 1024;
 const html = readFileSync(new URL('./auditor.html', import.meta.url), 'utf8');
 // Set on ct105-ai only after the Layer 1 command tripwire is installed there; otherwise the card reads IDLE.
 const layer1Enabled = process.env.WITNESS_LAYER1_ENABLED === '1';
-// ct105's monitor sends a heartbeat every interval; this many missed beats raise a Layer 2 'silence' alert.
-const heartbeatIntervalS = Number(process.env.WITNESS_HEARTBEAT_S || 30);
+// ct105's monitor sends a heartbeat every negotiated interval; this many missed beats raise silence.
 const heartbeatMissedLimit = Number(process.env.WITNESS_HEARTBEAT_MISSED || 3);
 // Layer 3: this long without any signed request from ct105 and the witness presumes a quarantine.
 const quarantineAfterS = Number(process.env.WITNESS_QUARANTINE_AFTER_S || 45);
@@ -86,10 +85,7 @@ const auditorStatus = (store) => {
   const status = store.status();
   const reconciliation = status.bank_reconciliation;
   const hasVerifiedRecords = reconciliation.checked_transactions > 0;
-  const successfulCheck = reconciliation.state === 'unavailable'
-    ? store.lastSuccessfulReconciliationAt
-    : reconciliation.checked_at;
-  const checkedAt = hasVerifiedRecords ? toEpochSeconds(successfulCheck) : null;
+  const checkedAt = toEpochSeconds(reconciliation.checked_at);
   const baseConnection =
     reconciliation.state === 'mismatch' || (reconciliation.state === 'ok' && hasVerifiedRecords)
       ? 'connected'
@@ -98,17 +94,19 @@ const auditorStatus = (store) => {
         : 'waiting';
   // Heartbeat silence means the monitored host went quiet, whatever the bank API says.
   const connection = store.hasOpenLayerEvent('silence') ? 'lost' : baseConnection;
-  const latest = store.latestCommittedEvent();
+  const latest = store.committedRecords()
+    .filter(({ event }) => store.bankPassedIds.has(event.transaction_id))
+    .at(-1);
   return {
     integration_mode: 'banking-witness',
     platform_id: 'banking-system',
     connection,
     // Seconds since ct105's last heartbeat; null until the first one arrives.
     heartbeat_age: store.lastHeartbeatAt ? Math.max(0, (Date.now() - store.lastHeartbeatAt) / 1000) : null,
-    heartbeat_interval: heartbeatIntervalS,
+    heartbeat_interval: store.heartbeatIntervalS,
     records_verified: reconciliation.checked_transactions,
     last_verified: hasVerifiedRecords && latest
-      ? { seq: latest.transaction_id, time: latest.updated_at }
+      ? { seq: latest.event.transaction_id, time: latest.committed_at }
       : null,
     last_sweep: checkedAt,
     server_time: Date.now() / 1000,
@@ -127,10 +125,15 @@ const auditorStatus = (store) => {
     records: recordCounts(store),
     bank_reconciliation: {
       state: reconciliation.state,
-      checked_at: hasVerifiedRecords ? successfulCheck : null,
+      checked_at: reconciliation.checked_at,
       last_successful_check: store.lastSuccessfulReconciliationAt,
       checked_transactions: reconciliation.checked_transactions,
-      mismatch_count: reconciliation.mismatches.length
+      mismatch_count: reconciliation.mismatches.length,
+      bank_calls_last_15m: reconciliation.bank_calls_last_15m,
+      rate_limited: reconciliation.rate_limited,
+      rate_limit_reason: reconciliation.rate_limit_reason,
+      backoff_until: reconciliation.backoff_until,
+      last_error: reconciliation.last_error || null
     }
   };
 };
@@ -594,15 +597,20 @@ export const createWitnessServer = (store) =>
           await store.resolveLayerEvents('heartbeat resumed', { layer: 2, kind: 'silence' });
         }
         // A heartbeat may carry a view of the bank's rows. A bad view must not undo the heartbeat itself.
-        const reply = { status: 'ok', interval_s: heartbeatIntervalS };
+        const reply = { status: 'ok', interval_s: store.updateHeartbeatInterval() };
         if (payload.bank !== undefined) {
           try {
             reply.sync = await evaluateHeartbeat(store, payload.bank);
+            if (reply.sync.suspect_ids.length) {
+              await checkBankRows(store, reply.sync.suspect_ids);
+              reply.interval_s = store.updateHeartbeatInterval();
+            }
           } catch (error) {
             if (!error.statusCode) throw error;
             reply.sync_error = error.message;
           }
         }
+        store.lastHeartbeatPromisedS = reply.interval_s;
         return sendJson(response, 200, reply);
       }
       if (pathname === '/v1/layer-events') {
@@ -653,7 +661,8 @@ export const checkHeartbeatSilence = async (store, nowMs = Date.now()) => {
     return false;
   }
   const silentS = (nowMs - store.lastHeartbeatAt) / 1000;
-  if (silentS <= heartbeatIntervalS * heartbeatMissedLimit) {
+  const promisedIntervalS = store.lastHeartbeatPromisedS;
+  if (silentS <= promisedIntervalS * heartbeatMissedLimit) {
     return false;
   }
   await store.recordLayerEvent({
@@ -662,7 +671,7 @@ export const checkHeartbeatSilence = async (store, nowMs = Date.now()) => {
     kind: 'silence',
     state: 'alert',
     summary: `no heartbeat from the monitored host for ${Math.round(silentS)} s`,
-    detail: { seconds: Math.round(silentS), expected_every_s: heartbeatIntervalS },
+    detail: { seconds: Math.round(silentS), expected_every_s: promisedIntervalS },
     who: {}
   });
   return true;
@@ -682,7 +691,6 @@ const start = async () => {
     console.error('Witness ledger integrity validation failed; entering read-only alert mode:', error.message);
   }
   const server = createWitnessServer(store);
-  startBankReconciliation(store);
   startChallenges(store);
   setInterval(() => {
     checkHeartbeatSilence(store).catch((error) => console.error('Heartbeat silence check failed:', error.message));

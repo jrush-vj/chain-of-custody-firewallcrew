@@ -29,7 +29,7 @@ Clone or update the repository into a new path without overwriting any existing
 checkout. On Oracle, run:
 
 ```bash
-sudo bash -e -c 'test ! -e /opt/coc-witness-source && git clone https://github.com/jrush-vj/chain-of-custody-firewallcrew.git /opt/coc-witness-source'
+sudo bash -e -c 'test ! -e /opt/coc-witness-source && git clone --recurse-submodules https://github.com/jrush-vj/chain-of-custody-firewallcrew.git /opt/coc-witness-source'
 ```
 
 If that source path already exists, inspect it and do not clone over it. Then
@@ -55,6 +55,8 @@ sudo install -d -o root -g root -m 0755 /opt/banking-witness
 sudo install -d -o banking-witness -g banking-witness -m 0700 /var/lib/banking-witness
 sudo install -m 0644 /opt/coc-witness-source/witness/server.js /opt/banking-witness/server.js
 sudo install -m 0644 /opt/coc-witness-source/witness/auditor.html /opt/banking-witness/auditor.html
+sudo install -m 0644 /opt/coc-witness-source/witness/records.js /opt/banking-witness/records.js
+sudo install -m 0644 /opt/coc-witness-source/witness/banksync.js /opt/banking-witness/banksync.js
 sudo install -m 0644 /opt/coc-witness-source/witness/store.js /opt/banking-witness/store.js
 sudo install -m 0644 /opt/coc-witness-source/witness/reconcile.js /opt/banking-witness/reconcile.js
 sudo install -m 0644 /opt/coc-witness-source/witness/package.json /opt/banking-witness/package.json
@@ -95,6 +97,14 @@ legacy Python service remains active on `127.0.0.1:8800` and verify both local
 health (`http://127.0.0.1:8787/health`) and public health
 (`https://witness.jrushvj.dev/health`).
 
+For the adaptive heartbeat and bank-check release, deploy in this order:
+update/restart the Oracle witness first, then update `monitor.py` on ct105 and
+restart `coc-layer1-monitor`. The old monitor ignores `interval_s` and remains
+at 30-second heartbeats until upgraded. Keep its signed
+`GET /v1/restore-pending` poll at 5 seconds: that contact refreshes Layer 3
+independently, so the 45-second quarantine presumption remains quiet even when
+heartbeats use 60 or 120 seconds.
+
 ## ct105 banking backend
 
 The ct105 `.env` needs these values:
@@ -120,29 +130,38 @@ amount, transaction ID, and witness state. It contains no account numbers or
 customer identifiers. Protect the dashboard with Cloudflare Access if it
 should not be public.
 
-The witness also polls
-`https://bank.jrushvj.dev/api/transactions/witness-reconcile` every 30 seconds
-for the current type, amount, and witness event ID of transactions already
-committed to its independent ledger. The endpoint only returns rows for the
-requested transaction IDs and does not return account or customer data. A
-changed or missing row produces a red dashboard alert. If ct105 is unreachable,
-the dashboard says reconciliation is unavailable; an outage is not claimed to
-be proof of tampering. Root on ct105 can still alter the API to lie or suppress
-the check, so this is a demonstration against database-record edits while the
-bank API continues to run normally—not guaranteed detection of a fully
-compromised host.
+The witness checks only requested transaction IDs against
+`https://bank.jrushvj.dev/api/transactions/witness-reconcile`. Checks are
+limited to one random settled record every 30 seconds, settled fresh records,
+and records whose hashes are flagged as suspects by a heartbeat. Requests
+contain batches of at most 100 IDs. A sliding 15-minute budget caps the witness
+at 60 bank calls, below the bank's shared 100-call-per-15-minute IP limit.
+Budget skips and HTTP 429 responses are shown as rate-limit status, not as
+missing records or tampering; a 429's `Retry-After`/`RateLimit-Reset` is honored.
+A changed or confirmed missing row produces a red dashboard alert. If the bank
+cannot be checked, the dashboard says reconciliation is unavailable; an
+outage is not claimed to be proof of tampering. Root on ct105 can still alter
+the API to lie or suppress the check, so this is a demonstration against
+database-record edits while the bank API continues to run normally—not
+guaranteed detection of a fully compromised host.
+The auditor's `/status` includes `bank_calls_last_15m`; the dashboard shows
+that witness-side count against its 60-call cap.
 
-The dashboard is the upstream Cybersec auditor UI from the pinned submodule,
-served by the existing Node process. Its live `/status`, `/alerts`,
+The dashboard is the integration-owned auditor page at `witness/auditor.html`,
+served by the existing Node process. It retains the "Restore to normal" control,
+which queues the existing signed restore request to ct105. Its live `/status`, `/alerts`,
 `/timeline`, `/mismatches`, and `/activity?since_id=` routes are projections
 of the Node JSONL witness ledger and its existing bank reconciliation result.
 The banking `/health`, `/v1/status`, `/v1/events`, and authenticated
 `/v1/prepare`, `/v1/commit`, and `/v1/abort` interfaces remain available and
 unchanged. No new process, systemd unit, hostname, or port is introduced.
 
-Only the bank-row comparison is live Layer 2 evidence: committed witness
+Only the bank-row comparison is live Layer 2 bank evidence: committed witness
 transaction IDs, types, amounts, and event IDs are checked against the
-existing `/api/transactions/witness-reconcile` endpoint. This does not run
+existing `/api/transactions/witness-reconcile` endpoint. Bank checks do not run
+on every heartbeat. On the graph an up spike is the witness asking, a down
+spike is the bank answering, `?` means no answer (including rate limiting),
+and heartbeat dots remain independent. This does not run
 Cybersec's separate Python agent, heartbeat/challenge checks, balance replay,
 or its expected SQLite schema; the existing banking database is PostgreSQL
 with a different schema. Layer 3 quarantine is not integrated.
@@ -164,10 +183,12 @@ should happen only after the tripwire is installed on the monitored host.
 
 Heartbeats and Layer 3 also come from ct105's monitor, using the same signed requests:
 
-- `POST /v1/heartbeat` every 30 s (`WITNESS_HEARTBEAT_S`), whether or not anything is being tampered
-  with. Replays are rejected. After 3 missed beats (`WITNESS_HEARTBEAT_MISSED`) the witness raises a
-  Layer 2 `silence` alert, which clears when beats resume; the entry stays in the timeline. Heartbeats
-  are held in memory, not the ledger.
+- `POST /v1/heartbeat` starts at 30 s (`WITNESS_HEARTBEAT_S`), whether or not anything is being
+  tampered with. The witness lengthens it to 60 s on a bank HTTP 429 or when bank calls exceed 80%
+  of budget. It returns to 30 s only after 15 minutes without a 429 and with usage below 50% of
+  budget. The interval is bounded to 15–120 s. Replays are rejected. After 3 missed promised
+  intervals (`WITNESS_HEARTBEAT_MISSED`) the witness raises a Layer 2 `silence` alert, which clears
+  when beats resume; the entry stays in the timeline. Heartbeats are held in memory, not the ledger.
 - Layer 3 is a dry run. The monitor reports `quarantine:locked` with the plan it would follow (log out
   accounts, restore the approved witness link settings, reboot) and executes none of it. It triggers when
   the approved `WITNESS_URL`/`docker-compose.yml` on ct105 change, or after 45 s without contact
@@ -176,12 +197,15 @@ Heartbeats and Layer 3 also come from ct105's monitor, using the same signed req
 - The website's "Restore to normal" button queues a fixed request (`POST /v1/restore-request`, one per
   minute). ct105 polls for it with a signed request, runs `restore-normal.sh`, and acknowledges; a
   successful restore resolves the earlier alerts, including Layer 3, and the timeline keeps the history.
+  The monitor continues polling `/v1/restore-pending` every 5 s; those signed requests refresh
+  `lastContactAt` and are independent of the negotiated heartbeat interval.
 
-When the reconcile pass finds a tampered record, `/mismatches` also carries evidence for the Layer 2
-panel: `previous_healthy`, the nearest earlier witnessed record that matched the bank in the same pass
-(proven healthy now, not assumed; `null` if there is none), and the tamper window, `last_matched_time`
-and `first_seen_time`, with at most one reconcile interval (10 s) of uncertainty. The window is held
-in memory, so after a witness restart it starts again from the first pass. The witness keeps only
+Each subset bank check updates only the requested records' findings. `/mismatches` also carries
+evidence for the Layer 2 panel: `previous_healthy`, the nearest earlier record in that same checked
+batch that matched the bank (`null` if none), and the tamper window, `last_matched_time` and
+`first_seen_time`. The window is held in memory, so after a witness restart it starts again from the
+first check. `checked_at` is the time of the latest bank request, and `checked_transactions` counts
+records whose latest check passed. The witness keeps only
 the type, amount, event id and transaction id of each record, so only those fields can be pinpointed
 from the four-field check. The copies below widen that.
 
@@ -218,9 +242,16 @@ git status --short
 test "$(git branch --show-current)" = main
 test -z "$(git status --porcelain)"
 git pull --ff-only origin main
+git submodule sync --recursive
+git submodule update --init --recursive
+for f in server.js auditor.html records.js banksync.js store.js reconcile.js package.json; do
+  test -s "/opt/coc-witness-source/witness/$f" || { echo "Missing witness release file: $f"; exit 1; }
+done
 sudo systemctl stop banking-witness.service
 sudo install -m 0644 /opt/coc-witness-source/witness/server.js /opt/banking-witness/server.js
 sudo install -m 0644 /opt/coc-witness-source/witness/auditor.html /opt/banking-witness/auditor.html
+sudo install -m 0644 /opt/coc-witness-source/witness/records.js /opt/banking-witness/records.js
+sudo install -m 0644 /opt/coc-witness-source/witness/banksync.js /opt/banking-witness/banksync.js
 sudo install -m 0644 /opt/coc-witness-source/witness/store.js /opt/banking-witness/store.js
 sudo install -m 0644 /opt/coc-witness-source/witness/reconcile.js /opt/banking-witness/reconcile.js
 sudo install -m 0644 /opt/coc-witness-source/witness/package.json /opt/banking-witness/package.json

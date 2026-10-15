@@ -3,6 +3,11 @@ import { chmod, mkdir, open, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const ZERO_HASH = '0'.repeat(64);
+const BANK_CALL_WINDOW_MS = 15 * 60 * 1000;
+const BANK_CALL_BUDGET = 60;
+const BANK_HEARTBEAT_HIGH_WATER = BANK_CALL_BUDGET * 0.8;
+const BANK_HEARTBEAT_LOW_WATER = BANK_CALL_BUDGET * 0.5;
+const clampHeartbeatInterval = (value) => Math.max(15, Math.min(120, Math.round(value)));
 
 const recordHash = (record) =>
   createHash('sha256').update(JSON.stringify(record)).digest('hex');
@@ -17,9 +22,10 @@ export class WitnessStore {
     // restarts because the counter starts from the clock, so the auditor's since_id polling still works.
     this.activity = [];
     this.activityCounter = Date.now();
-    this.reportedMismatches = new Set();
     this.lastHeartbeatAt = null;       // ms; heartbeats are held in memory, not the ledger
     this.lastHeartbeatSeq = 0;
+    this.heartbeatIntervalS = clampHeartbeatInterval(Number(process.env.WITNESS_HEARTBEAT_S) || 30);
+    this.lastHeartbeatPromisedS = this.heartbeatIntervalS;
     this.lastContactAt = null;         // ms; any signed request from ct105 counts as contact
     this.holderApprovals = new Set();  // key holders who approved the current quarantine (indexes)
     this.challengedEventIds = new Set(); // committed records already shown as a challenge on the graph
@@ -40,11 +46,26 @@ export class WitnessStore {
     this.queue = Promise.resolve();
     this.integrityError = null;
     this.lastSuccessfulReconciliationAt = null;
+    this.bankFindings = new Map();
+    this.bankPassedIds = new Set();
+    this.bankCallLog = [];
+    this.bank429Log = [];
+    this.bankBackoffUntil = 0;
+    this.bankBackoffReason = null;
+    this.bankBudgetLimitedAt = null;
+    this.bankPressureSince = this.heartbeatIntervalS >= 60 ? Date.now() : null;
+    this.lastBankCheckAt = null;
+    this.lastBankCallFailed = false;
+    this.lastBankCallError = null;
     this.reconciliation = {
       state: 'checking',
       checked_at: null,
       checked_transactions: 0,
-      mismatches: []
+      mismatches: [],
+      bank_calls_last_15m: 0,
+      rate_limited: false,
+      rate_limit_reason: null,
+      backoff_until: null
     };
   }
 
@@ -340,7 +361,8 @@ export class WitnessStore {
   // asks, then a trough when the bank answers. result is 'ok', 'mismatch', or 'none' (no answer).
   recordChallenge(transactionId, result, text = '') {
     const id = `c-${randomBytes(4).toString('hex')}`;
-    this.pushActivity('challenge_issued', `${id} record #${transactionId}`);
+    const note = result === 'none' && text === 'rate limited by the bank' ? ` ${text}` : '';
+    this.pushActivity('challenge_issued', `${id} record #${transactionId}${note}`);
     if (result === 'ok') {
       this.pushActivity('challenge_ok', `${id} record #${transactionId} ${text}`.trim());
     } else if (result === 'mismatch') {
@@ -349,28 +371,127 @@ export class WitnessStore {
     return id;
   }
 
-  setReconciliation(result) {
-    const checkedAt = new Date().toISOString();
-    if (result.checked_transactions > 0) {
-      this.lastSuccessfulReconciliationAt = checkedAt;
+  pruneBankCalls(nowMs = Date.now()) {
+    const cutoff = nowMs - BANK_CALL_WINDOW_MS;
+    this.bankCallLog = this.bankCallLog.filter((at) => at > cutoff);
+    this.bank429Log = this.bank429Log.filter((at) => at > cutoff);
+  }
+
+  updateHeartbeatInterval(nowMs = Date.now()) {
+    this.pruneBankCalls(nowMs);
+    const underPressure = this.bank429Log.length > 0 || this.bankCallLog.length > BANK_HEARTBEAT_HIGH_WATER;
+    if (underPressure) {
+      if (this.heartbeatIntervalS < 60) this.bankPressureSince = nowMs;
+      this.heartbeatIntervalS = Math.max(this.heartbeatIntervalS, 60);
+    } else if (
+      this.heartbeatIntervalS > 30 &&
+      this.bankCallLog.length < BANK_HEARTBEAT_LOW_WATER &&
+      this.bankPressureSince !== null &&
+      nowMs - this.bankPressureSince >= BANK_CALL_WINDOW_MS
+    ) {
+      this.heartbeatIntervalS = 30;
+      this.bankPressureSince = null;
     }
+    this.heartbeatIntervalS = clampHeartbeatInterval(this.heartbeatIntervalS);
+    return this.heartbeatIntervalS;
+  }
+
+  canCallBank(nowMs = Date.now()) {
+    this.updateHeartbeatInterval(nowMs);
+    return nowMs >= this.bankBackoffUntil && this.bankCallLog.length < BANK_CALL_BUDGET;
+  }
+
+  recordBankCall(nowMs = Date.now()) {
+    this.pruneBankCalls(nowMs);
+    this.bankCallLog.push(nowMs);
+    this.lastBankCheckAt = nowMs;
+    this.updateHeartbeatInterval(nowMs);
+  }
+
+  recordBankBudgetLimit(nowMs = Date.now()) {
+    this.bankBudgetLimitedAt = nowMs;
+    this.setReconciliation();
+  }
+
+  recordBankCallResult({ ok, error = null, retryAfterMs = null } = {}, nowMs = Date.now()) {
+    this.lastBankCheckAt = nowMs;
+    this.lastBankCallFailed = !ok;
+    this.lastBankCallError = error;
+    if (ok) this.lastSuccessfulReconciliationAt = new Date(nowMs).toISOString();
+    if (retryAfterMs !== null) {
+      this.bank429Log.push(nowMs);
+      this.bankBackoffUntil = Math.max(this.bankBackoffUntil, nowMs + retryAfterMs);
+      this.bankBackoffReason = 'bank rate-limited';
+      this.bankPressureSince = nowMs;
+    } else if (ok && nowMs >= this.bankBackoffUntil) {
+      this.bankBackoffReason = null;
+    }
+    this.updateHeartbeatInterval(nowMs);
+    this.setReconciliation();
+  }
+
+  setReconciliation(result) {
+    this.pruneBankCalls();
+    if (result && Array.isArray(result.mismatches)) {
+      this.lastBankCheckAt ??= Date.now();
+      this.lastBankCallFailed = false;
+      this.bankFindings.clear();
+      for (const finding of result.mismatches) {
+        this.bankFindings.set(finding.transaction_id, finding);
+      }
+      if (Number.isSafeInteger(result.checked_transactions)) {
+        const findingIds = new Set(this.bankFindings.keys());
+        this.bankPassedIds = new Set(
+          this.committedEvents()
+            .map((event) => event.transaction_id)
+            .filter((id) => !findingIds.has(id))
+            .slice(0, result.checked_transactions)
+        );
+      }
+      if (result.checked_transactions > 0) {
+        this.lastSuccessfulReconciliationAt = new Date(this.lastBankCheckAt).toISOString();
+      }
+    }
+    const mismatches = [...this.bankFindings.values()]
+      .sort((a, b) => a.transaction_id - b.transaction_id);
+    const checkedAt = this.lastBankCheckAt === null
+      ? null
+      : new Date(this.lastBankCheckAt).toISOString();
+    const backoffActive = Date.now() < this.bankBackoffUntil;
+    const budgetLimited = this.bankCallLog.length >= BANK_CALL_BUDGET ||
+      (this.bankBudgetLimitedAt !== null && Date.now() - this.bankBudgetLimitedAt < BANK_CALL_WINDOW_MS);
+    const rateLimited = backoffActive || budgetLimited;
     this.reconciliation = {
-      ...result,
-      checked_at: checkedAt
+      state: mismatches.length
+        ? 'mismatch'
+        : this.lastBankCallFailed
+          ? 'unavailable'
+          : checkedAt
+            ? 'ok'
+            : 'checking',
+      checked_at: checkedAt,
+      checked_transactions: this.bankPassedIds.size,
+      mismatches,
+      ...(this.lastBankCallError && { error: 'Bank transaction source could not be checked.', last_error: this.lastBankCallError }),
+      rate_limited: rateLimited,
+      rate_limit_reason: rateLimited
+        ? backoffActive ? this.bankBackoffReason || 'bank rate-limited' : 'witness request budget exhausted'
+        : null,
+      bank_calls_last_15m: this.bankCallLog.length,
+      backoff_until: this.bankBackoffUntil > Date.now()
+        ? new Date(this.bankBackoffUntil).toISOString()
+        : null
     };
+    return this.reconciliation;
   }
 
   setReconciliationUnavailable(error) {
-    this.reconciliation = {
-      ...this.reconciliation,
-      state: 'unavailable',
-      error: 'Bank transaction source could not be checked.',
-      last_error: error,
-      checked_at: new Date().toISOString()
-    };
+    this.recordBankCallResult({ ok: false, error }, Date.now());
   }
 
   status() {
+    this.updateHeartbeatInterval();
+    this.setReconciliation();
     return {
       healthy: !this.integrityError,
       ...(this.integrityError && {

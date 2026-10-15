@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from contextlib import redirect_stdout
 
 _dir = tempfile.mkdtemp(prefix="coc-sync-test-")
@@ -78,7 +79,8 @@ class HeartbeatSyncTests(unittest.TestCase):
     def test_the_heartbeat_carries_the_bank_view_and_the_rotation_advances(self):
         witness = FakeWitness({"status": "ok", "sync": {"need_rows": []}})
         result, _ = self.run_beat(witness)
-        self.assertTrue(result)
+        self.assertTrue(result[0])
+        self.assertEqual(result[1], monitor.HEARTBEAT_S)
         path, body = witness.requests[0]
         self.assertEqual(path, "/v1/heartbeat")
         self.assertEqual(body["bank"], {"count": 5, "max_id": 5, "ranges": "1-5", "sweep": []})
@@ -121,7 +123,7 @@ class HeartbeatSyncTests(unittest.TestCase):
         monitor.bank_reader.build_view = unreadable
         witness = FakeWitness({"status": "ok"})
         result, output = self.run_beat(witness)
-        self.assertTrue(result, "a missed heartbeat is an alert, so the database must never hold it up")
+        self.assertTrue(result[0], "a missed heartbeat is an alert, so the database must never hold it up")
         self.assertNotIn("bank", witness.requests[0][1])
         self.assertIn("bank view unavailable", output)
         # The warning is rate-limited, not repeated every 30 seconds.
@@ -137,8 +139,28 @@ class HeartbeatSyncTests(unittest.TestCase):
     def test_a_rejected_view_is_logged_and_the_heartbeat_still_counts(self):
         witness = FakeWitness({"status": "ok", "sync_error": "bank.ranges does not add up to bank.count"})
         result, output = self.run_beat(witness)
-        self.assertTrue(result)
+        self.assertTrue(result[0])
         self.assertIn("the witness rejected the bank view", output)
+
+    def test_server_interval_sets_the_next_heartbeat_interval(self):
+        witness = FakeWitness({"status": "ok", "interval_s": 60})
+        result, _ = self.run_beat(witness)
+        self.assertEqual(result, (True, 60.0))
+        self.assertEqual(witness.requests[0][1]["interval_s"], monitor.HEARTBEAT_S)
+
+    def test_failed_heartbeat_keeps_the_last_interval(self):
+        def unreachable(request, timeout=10):
+            raise monitor.urllib.error.URLError("offline")
+
+        result, _ = self.run_beat(unreachable)
+        self.assertEqual(result, (False, monitor.HEARTBEAT_S))
+
+    def test_next_heartbeat_uses_reply_interval_with_bounded_jitter(self):
+        with unittest.mock.patch.object(monitor.random, "uniform", return_value=0.9) as jitter:
+            deadline = monitor.next_heartbeat_at(60, now=100)
+        jitter.assert_called_once_with(0.9, 1.1)
+        self.assertGreaterEqual(deadline, 54 + 100)
+        self.assertLessEqual(deadline, 66 + 100)
 
 
 if __name__ == "__main__":

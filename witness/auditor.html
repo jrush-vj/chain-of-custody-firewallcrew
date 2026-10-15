@@ -142,6 +142,7 @@ const money = (f, v) => (f === "amount_minor" && Number.isInteger(v) ? (v / 100)
 let S = null, alerts = [], events = [], mism = [], acts = [], lastAct = 0, offset = 0;
 let view = 0, pinned = false, prevCaught = { 1: 0, 2: 0, 3: 0 };
 let layer3WasActive = false, layer3Disconnecting = false;
+let monitorTooltips = [];
 
 async function j(p) { const r = await fetch(p, { cache: "no-store" }); if (!r.ok) throw new Error(r.status); return r.json(); }
 
@@ -180,15 +181,21 @@ function renderCards(ls) {
 
 function screen0() {
   const s = S, lv = s.last_verified;
+  const reconciliation = s.bank_reconciliation || {};
+  const bankNote = reconciliation.rate_limited
+    ? `<div class="k">Bank check</div><div class="v">${esc(reconciliation.rate_limit_reason || "Bank rate-limited")}${reconciliation.backoff_until ? " · retry " + clock(Date.parse(reconciliation.backoff_until) / 1000) : ""}</div>`
+    : "";
   return `<h2>${esc(s.platform_id || "Waiting for server")}</h2>
   <p class="sub">${s.connection === "connected" ? "Connected · every record sealed, checked and verified" : s.connection === "lost" ? "No contact with the server" : "Waiting for the first heartbeat"}</p>
   <div class="big">
     <div class="stat"><div class="k">Status</div><div class="v ${s.connection === "connected" ? "ok" : "bad"}">${esc(s.connection.toUpperCase())}</div></div>
     <div class="stat"><div class="k">Last verified record</div><div class="v">${lv ? "#" + lv.seq : "—"}</div><div class="k">${lv ? isoClock(lv.time) : ""}</div></div>
     <div class="stat"><div class="k">Records verified</div><div class="v">${s.records_verified}</div></div>
-    <div class="stat"><div class="k">Last full check</div><div class="v">${s.last_sweep ? clock(s.last_sweep) : "—"}</div><div class="k">rolling sweep of every record</div></div>
+    <div class="stat"><div class="k">Last bank check</div><div class="v">${s.last_sweep ? clock(s.last_sweep) : "—"}</div><div class="k">random, fresh, or suspect records</div></div>
+    <div class="stat"><div class="k">Witness bank calls / 15 min</div><div class="v">${reconciliation.bank_calls_last_15m ?? 0} / 60</div></div>
+    ${bankNote ? `<div class="stat">${bankNote}</div>` : ""}
   </div>
-  <h3 style="margin:26px 0 8px;color:var(--muted);font-size:14px;letter-spacing:.1em;text-transform:uppercase">Latest random checks</h3>
+  <h3 style="margin:26px 0 8px;color:var(--muted);font-size:14px;letter-spacing:.1em;text-transform:uppercase">Latest bank checks</h3>
   <ul class="feed">${acts.filter((a) => a.kind.startsWith("challenge_") && a.kind !== "challenge_issued").slice(-6).reverse()
     .map((a) => `<li><span class="m">${clock(a.time)}</span> <span class="${a.kind === "challenge_ok" ? "okc" : "badc"}">${a.kind === "challenge_ok" ? "✓" : "✗"}</span> ${esc(a.detail.replace(/^c-[0-9a-f]+ /, ""))}</li>`).join("") || '<li class="empty">Waiting for the first check…</li>'}</ul>`;
 }
@@ -348,6 +355,7 @@ function label(detail) {
 function drawMonitor() {
   const cv = $("mon"), dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
   if (!W || !H) return;
+  monitorTooltips = [];
   if (cv.width !== W * dpr || cv.height !== H * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
   const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
   const now = Date.now() / 1000 + offset, mid = H * 0.55, amp = Math.min(H * 0.38, 70), x = (t) => W - ((now - t) / WINDOW) * W;
@@ -385,7 +393,15 @@ function drawMonitor() {
       g.fillStyle = col("--blue");
       if (lastLabel - xx > 46) { g.fillText(label(a.detail), xx, mid - amp - 6); lastLabel = xx; }
       g.beginPath(); g.arc(xx, mid - amp, 3, 0, 7); g.fill();
-      if (!answered.has(id) && now - a.time > 6) { g.fillStyle = col("--amber"); g.fillText("?", xx + 12, mid - amp * 0.4); }
+      if (!answered.has(id) && now - a.time > 6) {
+        const y = mid - amp * 0.4;
+        g.fillStyle = col("--amber"); g.fillText("?", xx + 12, y);
+        monitorTooltips.push({
+          x: xx + 12,
+          y,
+          text: a.detail.includes("rate limited by the bank") ? "bank rate-limited" : "no answer"
+        });
+      }
     } else {
       const c = a.kind === "challenge_ok" ? col("--green") : col("--red");
       g.strokeStyle = c; g.lineWidth = 3; g.beginPath(); g.moveTo(xx - 4, mid); g.lineTo(xx, mid + amp * 0.8); g.lineTo(xx + 4, mid); g.stroke();
@@ -398,6 +414,11 @@ function drawMonitor() {
   g.fillText(dead ? "NO HEARTBEAT" : `heartbeat ${S ? (S.heartbeat_age ?? 0).toFixed(0) : 0}s ago`, 6, H - 8);
   g.textAlign = "right"; g.fillText(`−${WINDOW}s … now`, W - 6, H - 8);
 }
+
+$("mon").addEventListener("mousemove", (event) => {
+  const mark = monitorTooltips.find((item) => Math.abs(item.x - event.offsetX) <= 14 && Math.abs(item.y - event.offsetY) <= 18);
+  $("mon").title = mark ? mark.text : "";
+});
 
 function renderAll() {
   if (!S) return;

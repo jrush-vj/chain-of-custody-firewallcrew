@@ -35,6 +35,7 @@ import hashlib
 import hmac
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -47,12 +48,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import l3_config_guard as config_guard  # noqa: E402
 import l3_quarantine  # noqa: E402
 import l3_lockout  # noqa: E402
-import demo_keys  # noqa: E402
-
-# When Layer 3 fires automatically, push the demo account out for real (see l3_lockout.py: it refuses
-# to touch anything but that one non-root account, however this is set). Set to "0" to fall back to the
-# pure dry-run report instead, e.g. while testing on a host with no demo account.
-LAYER3_REAL_LOCKOUT = os.environ.get("COC_LAYER3_REAL_LOCKOUT", "1") == "1"
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "layer2"))
 import bank_reader  # noqa: E402
@@ -69,7 +64,7 @@ SNAPSHOT_LIMIT = 3000  # keeps one event well under the witness's 16 KB request 
 SUMMARY_LIMIT = 200
 ARM_CHECK_S = 10
 RESTORE_CHECK_S = 5
-HEARTBEAT_S = float(os.environ.get("HEARTBEAT_S", "30"))
+HEARTBEAT_S = max(15.0, min(120.0, float(os.environ.get("HEARTBEAT_S", "30"))))
 CONFIG_CHECK_S = 5
 QUARANTINE_AFTER_S = float(os.environ.get("QUARANTINE_AFTER_S", "45"))
 # While this file exists every witness request fails, which simulates a cut network link in the demo.
@@ -400,14 +395,14 @@ def sync_rows(need):
         log(f"sent {sent} bank row(s) to the witness; it now holds {stored}")
 
 
-def send_heartbeat():
+def send_heartbeat(interval_s=HEARTBEAT_S):
     """One signed heartbeat. Never queued or retried: a missed beat is what the witness watches for.
 
     seq is the clock in milliseconds, so it keeps rising across monitor restarts and the witness can
     reject replays. It is sent whether or not anything is being tampered with. When the bank can be
     read, it also carries a compact view of the bank; the witness answers with the rows it still needs.
     """
-    payload = {"seq": int(time.time() * 1000), "interval_s": HEARTBEAT_S}
+    payload = {"seq": int(time.time() * 1000), "interval_s": interval_s}
     view = collect_bank_view()
     if view is not None:
         payload["bank"] = view
@@ -416,13 +411,29 @@ def send_heartbeat():
             reply = json.loads(response.read().decode("utf-8") or "{}")
     except (urllib.error.URLError, OSError, ValueError) as error:
         log(f"heartbeat not delivered: {error}")
-        return False
+        return False, interval_s
+    if not isinstance(reply, dict):
+        log("heartbeat reply was not an object; keeping the last interval")
+        return False, interval_s
     if reply.get("sync_error"):
         log(f"the witness rejected the bank view: {reply['sync_error']}")
     need = (reply.get("sync") or {}).get("need_rows") or []
     if need:
         sync_rows(need)
-    return True
+    next_interval = reply.get("interval_s", interval_s)
+    if (
+        isinstance(next_interval, bool)
+        or not isinstance(next_interval, (int, float))
+        or not 15 <= next_interval <= 120
+    ):
+        log(f"witness returned an invalid heartbeat interval; keeping {interval_s} s")
+        next_interval = interval_s
+    return True, float(next_interval)
+
+
+def next_heartbeat_at(interval_s, now=None):
+    """Schedule the next beat with small jitter so it does not align with other fixed timers."""
+    return (time.time() if now is None else now) + interval_s * random.uniform(0.9, 1.1)
 
 
 # ---------- layer 3 ----------
@@ -440,20 +451,35 @@ def layer3_trigger_reason():
 
 
 def respond_to_layer3(reason):
-    """Build the layer-3 event for a newly-detected compromise: a real, demo-account-only lockout when
-    LAYER3_REAL_LOCKOUT is on and the demo account exists, otherwise the dry-run report. Never raises:
-    an unsafe or missing target falls back to the dry run rather than taking any real action."""
-    if LAYER3_REAL_LOCKOUT:
+    """Respond according to the explicit mode; invalid or incomplete full configuration stays dry."""
+    try:
+        mode = l3_lockout.configured_mode()
+    except l3_lockout.FullLockoutRefused as error:
+        log(f"LAYER 3 response refused ({error}); reporting dry run")
+        return l3_quarantine.run_dry(reason)
+
+    if mode == "full":
+        if not l3_lockout.full_mode_confirmed():
+            log("LAYER 3 full response refused (missing or incorrect COC_L3_FULL_CONFIRM); reporting dry run")
+            return l3_quarantine.run_dry(reason)
         try:
-            event, locked = l3_lockout.lock(reason)
-            log(f"LAYER 3 (real, demo account only): {reason}; locked={locked}")
-            for holder, key in demo_keys.DEMO_KEYS.items():
-                log(f"  unlock key — {holder}: {key}")
+            event, record = l3_lockout.full_lock(reason)
+            log(
+                f"LAYER 3 full {record.get('action_state', 'quarantined')}: {reason}; "
+                f"accounts={len(record.get('users', []))}; failed={record.get('failed_actions', [])}"
+            )
             return event
-        except l3_lockout.UnsafeTarget as error:
-            log(f"LAYER 3 real lockout refused ({error}); falling back to a dry-run report")
-    log(f"LAYER 3 (dry run): {reason}")
-    return l3_quarantine.run_dry(reason)
+        except (l3_lockout.FullLockoutRefused, l3_lockout.UnsafeTarget) as error:
+            log(f"LAYER 3 full lockout refused ({error}); reporting dry run")
+            return l3_quarantine.run_dry(reason)
+
+    try:
+        event, locked = l3_lockout.lock(reason)
+        log(f"LAYER 3 (real, demo account only): {reason}; locked={locked}")
+        return event
+    except l3_lockout.UnsafeTarget as error:
+        log(f"LAYER 3 demo lockout refused ({error}); reporting dry run")
+        return l3_quarantine.run_dry(reason)
 
 
 # ---------- main loop ----------
@@ -474,6 +500,7 @@ def run():
     pending = [status_event(armed, count)]
     last_armed, next_status_check = armed, time.time() + ARM_CHECK_S
     next_restore_check = time.time() + RESTORE_CHECK_S
+    heartbeat_interval = HEARTBEAT_S
     next_heartbeat = time.time()  # the first heartbeat goes out immediately
     next_config_check = time.time() + CONFIG_CHECK_S
     layer3_reason = None  # set while a quarantine is recorded, so it fires once per compromise
@@ -500,8 +527,8 @@ def run():
             check_restore_request()
             next_restore_check = time.time() + RESTORE_CHECK_S
         if time.time() >= next_heartbeat:
-            send_heartbeat()
-            next_heartbeat = time.time() + HEARTBEAT_S
+            _, heartbeat_interval = send_heartbeat(heartbeat_interval)
+            next_heartbeat = next_heartbeat_at(heartbeat_interval)
         if time.time() >= next_config_check:
             reason = layer3_trigger_reason()
             if reason and not layer3_reason:

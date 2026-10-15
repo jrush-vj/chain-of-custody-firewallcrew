@@ -45,7 +45,7 @@ if [ "$role" = witness ]; then
   sudo systemctl restart banking-witness.service
   sleep 3
   curl --fail -s http://127.0.0.1:8787/health >/dev/null && echo HEALTH_OK
-  curl --fail -s http://127.0.0.1:8787/status >/dev/null && echo STATUS_OK
+  curl --fail -s http://127.0.0.1:8787/status && echo STATUS_OK
   curl --fail -s https://witness.jrushvj.dev/ | grep -F 'Witness · Auditor' >/dev/null && echo DASHBOARD_OK
   sudo systemctl is-active banking-witness.service
 else

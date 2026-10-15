@@ -111,7 +111,7 @@ export const evaluateHeartbeat = async (store, bank, nowMs = Date.now()) => {
   await markBaselineComplete(store, view.present);
 
   const need = [...missingCopies(store, view.present), ...suspects].slice(0, NEED_LIMIT);
-  return syncReply(store, need);
+  return { ...syncReply(store, need), suspect_ids: suspects };
 };
 
 // Rows with no witnessed commit are a row that reached the database without going through the bank's

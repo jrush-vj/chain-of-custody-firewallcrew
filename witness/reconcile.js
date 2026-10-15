@@ -1,3 +1,6 @@
+export const BANK_RANDOM_CHECK_INTERVAL_MS = 30_000;
+export const BANK_CALL_WINDOW_MS = 15 * 60 * 1000;
+export const BANK_CALL_BUDGET = 60;
 const batchSize = 100;
 
 const getEndpoint = () => {
@@ -11,223 +14,211 @@ const getEndpoint = () => {
   return endpoint;
 };
 
-const fetchJson = async (url) => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
-  try {
-    const response = await fetch(url, {
-      headers: { accept: 'application/json' },
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      throw new Error(`Bank reconciliation endpoint returned HTTP ${response.status}`);
-    }
-    return await response.json();
-  } finally {
-    clearTimeout(timeout);
+const retryDelayMs = (response, nowMs) => {
+  const retryAfter = response.headers?.get?.('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+    const dateMs = Date.parse(retryAfter);
+    if (Number.isFinite(dateMs)) return Math.max(0, dateMs - nowMs);
   }
+  const reset = Number(response.headers?.get?.('ratelimit-reset'));
+  return Number.isFinite(reset) && reset >= 0 ? reset * 1000 : 60_000;
 };
 
-export const reconcileBankTransactions = async (store, fetchImpl = fetch) => {
-  const endpoint = getEndpoint();
-  const witnessed = store.committedEvents();
-  const observed = new Map();
+const eventByTransactionId = (store) =>
+  new Map(store.committedEvents().map((event) => [event.transaction_id, event]));
 
-  for (let offset = 0; offset < witnessed.length; offset += batchSize) {
-    const batch = witnessed.slice(offset, offset + batchSize);
-    const url = new URL(endpoint);
-    url.searchParams.set(
-      'transaction_ids',
-      batch.map((event) => event.transaction_id).join(',')
-    );
-    const response = await fetchImpl(url, {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!response.ok) {
-      throw new Error(`Bank reconciliation endpoint returned HTTP ${response.status}`);
-    }
-    const body = await response.json();
-    if (!body || !Array.isArray(body.transactions)) {
-      throw new Error('Bank reconciliation endpoint returned an invalid response');
-    }
-    for (const transaction of body.transactions) {
-      if (
-        !Number.isSafeInteger(Number(transaction.transaction_id)) ||
-        !Number.isSafeInteger(Number(transaction.amount_minor)) ||
-        typeof transaction.type !== 'string' ||
-        typeof transaction.event_id !== 'string'
-      ) {
-        throw new Error('Bank reconciliation response contains an invalid transaction record');
-      }
-      const transactionId = Number(transaction.transaction_id);
-      if (observed.has(transactionId)) {
-        throw new Error('Bank reconciliation response contains a duplicate transaction');
-      }
-      observed.set(transactionId, transaction);
-    }
-  }
-
-  const mismatches = [];
-  const healthy = []; // witnessed records that matched the bank in this pass, in ledger order
-  const passAt = Date.now();
-  const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
-  for (const event of witnessed) {
-    const actual = observed.get(event.transaction_id);
-    const differences = [];
-    if (actual) {
-      if (actual.type !== event.type) differences.push('type');
-      if (Number(actual.amount_minor) !== event.amount_minor) differences.push('amount');
-      if (actual.event_id !== event.event_id) differences.push('event_id');
-    }
-    const intact = Boolean(actual) && differences.length === 0;
-
-    // When this record last matched the bank, and when it first stopped matching: the tamper window.
-    const health = store.recordHealth.get(event.transaction_id) || { lastMatchedAt: null, firstSeenAt: null };
-    if (intact) {
-      health.lastMatchedAt = passAt;
-      health.firstSeenAt = null;
-    } else if (health.firstSeenAt === null) {
-      health.firstSeenAt = passAt;
-    }
-    store.recordHealth.set(event.transaction_id, health);
-    if (intact) {
-      healthy.push(event);
-      continue;
-    }
-
-    // The nearest earlier record that matched the bank in this same pass. It is proven healthy now,
-    // not assumed to be.
-    const reference = healthy.at(-1);
-    const evidence = {
-      previous_healthy: reference
-        ? {
-            transaction_id: reference.transaction_id,
-            type: reference.type,
-            amount_minor: reference.amount_minor,
-            event_id: reference.event_id,
-            verified_at: iso(passAt)
-          }
-        : null,
-      matched_before: iso(health.lastMatchedAt),
-      first_seen_at: iso(health.firstSeenAt)
-    };
-    if (!actual) {
-      mismatches.push({
-        transaction_id: event.transaction_id,
-        issue: 'missing',
-        witnessed_type: event.type,
-        witnessed_amount_minor: event.amount_minor,
-        witnessed_event_id: event.event_id,
-        ...evidence
-      });
-      continue;
-    }
-    mismatches.push({
-      transaction_id: event.transaction_id,
-      issue: `changed_${differences.join('_')}`,
-      fields: differences,
-      witnessed_type: event.type,
-      bank_type: actual.type,
-      witnessed_amount_minor: event.amount_minor,
-      bank_amount_minor: Number(actual.amount_minor),
-      witnessed_event_id: event.event_id,
-      bank_event_id: actual.event_id,
-      ...evidence
-    });
-  }
-
-  store.setReconciliation({
-    state: mismatches.length ? 'mismatch' : 'ok',
-    checked_transactions: witnessed.length,
-    mismatches
-  });
-
-  // New mismatches and recoveries become challenge entries on the auditor graph. Heartbeats come
-  // from ct105's monitor, not from this pass, so tampering never changes the heartbeat rhythm.
-  const current = new Set();
-  for (const mismatch of mismatches) {
-    const key = `${mismatch.transaction_id}:${mismatch.issue}`;
-    current.add(key);
-    if (!store.reportedMismatches.has(key)) {
-      store.reportedMismatches.add(key);
-      store.recordChallenge(mismatch.transaction_id, 'mismatch', `differs from the bank: ${mismatch.issue.replaceAll('_', ' ')}`);
-    }
-  }
-  for (const key of [...store.reportedMismatches]) {
-    if (!current.has(key)) {
-      store.reportedMismatches.delete(key);
-      store.recordChallenge(Number(key.split(':')[0]), 'ok', 'matches the bank again');
-    }
-  }
-  return store.status().bank_reconciliation;
-};
-
-export const startBankReconciliation = (store, intervalMs = 10_000) => {
-  let running = false;
-  const run = async () => {
-    if (running || store.integrityError) return;
-    running = true;
-    try {
-      await reconcileBankTransactions(store);
-    } catch (error) {
-      console.error('Bank transaction reconciliation failed:', error.message);
-      store.setReconciliationUnavailable(error.message);
-    } finally {
-      running = false;
-    }
+const createFinding = (event, actual, differences, passAt, previousHealthy, health) => {
+  const evidence = {
+    previous_healthy: previousHealthy
+      ? {
+          transaction_id: previousHealthy.transaction_id,
+          type: previousHealthy.type,
+          amount_minor: previousHealthy.amount_minor,
+          event_id: previousHealthy.event_id,
+          verified_at: new Date(passAt).toISOString()
+        }
+      : null,
+    matched_before: health.lastMatchedAt ? new Date(health.lastMatchedAt).toISOString() : null,
+    first_seen_at: health.firstSeenAt ? new Date(health.firstSeenAt).toISOString() : null
   };
-  void run();
-  const timer = setInterval(run, intervalMs);
-  timer.unref();
-  return timer;
+  if (!actual) {
+    return {
+      transaction_id: event.transaction_id,
+      issue: 'missing',
+      witnessed_type: event.type,
+      witnessed_amount_minor: event.amount_minor,
+      witnessed_event_id: event.event_id,
+      ...evidence
+    };
+  }
+  return {
+    transaction_id: event.transaction_id,
+    issue: `changed_${differences.join('_')}`,
+    fields: differences,
+    witnessed_type: event.type,
+    bank_type: actual.type,
+    witnessed_amount_minor: event.amount_minor,
+    bank_amount_minor: Number(actual.amount_minor),
+    witnessed_event_id: event.event_id,
+    bank_event_id: actual.event_id,
+    ...evidence
+  };
 };
 
-// ---------- challenges: the crest and trough on the auditor's heartbeat graph ----------
-
-// Asks the bank about one witnessed record and records the answer on the graph. Returns 'ok',
-// 'mismatch', 'missing' (the bank answered but has no confirmed row for it) or 'none' (no answer).
-export const challengeRecord = async (store, event, fetchImpl = fetch, { recordMissing = true } = {}) => {
-  let actual;
-  try {
-    const url = new URL(getEndpoint());
-    url.searchParams.set('transaction_ids', String(event.transaction_id));
-    const response = await fetchImpl(url, {
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const body = await response.json();
-    if (!body || !Array.isArray(body.transactions)) throw new Error('invalid response');
-    actual = body.transactions.find((item) => Number(item.transaction_id) === event.transaction_id);
-  } catch {
-    store.recordChallenge(event.transaction_id, 'none');
-    return 'none';
-  }
-  if (!actual) {
-    if (recordMissing) store.recordChallenge(event.transaction_id, 'mismatch', 'differs from the bank: missing');
-    return 'missing';
-  }
+const checkResultFor = (event, actual) => {
+  if (!actual) return { state: 'missing', finding: null };
   const differences = [];
   if (actual.type !== event.type) differences.push('type');
   if (Number(actual.amount_minor) !== event.amount_minor) differences.push('amount');
-  if (actual.event_id !== event.event_id) differences.push('event id');
-  if (differences.length) {
-    store.recordChallenge(event.transaction_id, 'mismatch', `differs from the bank: changed ${differences.join(' and ')}`);
-    return 'mismatch';
-  }
-  store.recordChallenge(event.transaction_id, 'ok', 'matches the bank');
-  return 'ok';
+  if (actual.event_id !== event.event_id) differences.push('event_id');
+  return differences.length
+    ? { state: 'mismatch', finding: null, differences }
+    : { state: 'ok', finding: null, differences: [] };
 };
 
-// One scheduler step. Records that were just witnessed are challenged straight away, so the graph
-// reacts to new traffic. One random record is challenged every randomEveryMs even when nothing is
-// happening, so a crest and trough is always present at that rhythm (a record the bank cannot
-// answer for shows as a crest with no trough).
+const recordChallengeResult = (store, event, result) => {
+  if (result.state === 'ok') {
+    store.recordChallenge(event.transaction_id, 'ok', 'matches the bank');
+  } else if (result.state === 'mismatch') {
+    const issue = result.finding?.issue || `changed_${result.differences.join('_')}`;
+    store.recordChallenge(event.transaction_id, 'mismatch', `differs from the bank: ${issue.replaceAll('_', ' ')}`);
+  } else if (result.state === 'missing') {
+    if (result.recordMissing !== false) {
+      store.recordChallenge(event.transaction_id, 'mismatch', 'differs from the bank: missing');
+    } else {
+      store.recordChallenge(event.transaction_id, 'none', 'record still settling');
+    }
+  } else if (result.state === 'rate_limited') {
+    store.recordChallenge(event.transaction_id, 'none', 'rate limited by the bank');
+  } else {
+    store.recordChallenge(event.transaction_id, 'none');
+  }
+};
+
+// Check only the requested transaction ids. Each HTTP request is capped at 100 ids and shares
+// a 60-call rolling budget with every other bank check.
+export const checkBankRows = async (store, ids, fetchImpl = fetch, { recordMissing = true, now = Date.now } = {}) => {
+  const events = eventByTransactionId(store);
+  const requested = [...new Set(ids)].filter((id) => events.has(id)).sort((a, b) => a - b);
+  const results = new Map();
+  if (requested.length === 0 || store.integrityError) return results;
+
+  for (let offset = 0; offset < requested.length; offset += batchSize) {
+    const batchIds = requested.slice(offset, offset + batchSize);
+    const batchEvents = batchIds.map((id) => events.get(id));
+    const nowMs = now();
+    if (!store.canCallBank(nowMs)) {
+      store.recordBankBudgetLimit(nowMs);
+      for (const event of batchEvents) {
+        const result = { state: 'rate_limited' };
+        results.set(event.transaction_id, result);
+        recordChallengeResult(store, event, result);
+      }
+      store.setReconciliation();
+      continue;
+    }
+
+    store.recordBankCall(nowMs);
+    try {
+      const url = new URL(getEndpoint());
+      url.searchParams.set('transaction_ids', batchIds.join(','));
+      const response = await fetchImpl(url, {
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.timeout(8000)
+      });
+      if (response.status === 429) {
+        const error = 'Bank reconciliation endpoint returned HTTP 429';
+        store.recordBankCallResult({
+          ok: false,
+          error,
+          retryAfterMs: retryDelayMs(response, now())
+        }, now());
+        for (const event of batchEvents) {
+          const result = { state: 'rate_limited' };
+          results.set(event.transaction_id, result);
+          recordChallengeResult(store, event, result);
+        }
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`Bank reconciliation endpoint returned HTTP ${response.status}`);
+      }
+      const body = await response.json();
+      if (!body || !Array.isArray(body.transactions)) {
+        throw new Error('Bank reconciliation endpoint returned an invalid response');
+      }
+      const observed = new Map();
+      for (const transaction of body.transactions) {
+        if (
+          !Number.isSafeInteger(Number(transaction.transaction_id)) ||
+          !Number.isSafeInteger(Number(transaction.amount_minor)) ||
+          typeof transaction.type !== 'string' ||
+          typeof transaction.event_id !== 'string'
+        ) {
+          throw new Error('Bank reconciliation response contains an invalid transaction record');
+        }
+        const transactionId = Number(transaction.transaction_id);
+        if (observed.has(transactionId)) {
+          throw new Error('Bank reconciliation response contains a duplicate transaction');
+        }
+        observed.set(transactionId, transaction);
+      }
+
+      const checkedAt = now();
+      store.recordBankCallResult({ ok: true }, checkedAt);
+      let previousHealthy = null;
+      for (const event of batchEvents) {
+        const actual = observed.get(event.transaction_id);
+        const compared = checkResultFor(event, actual);
+        const health = store.recordHealth.get(event.transaction_id) || { lastMatchedAt: null, firstSeenAt: null };
+        if (compared.state === 'ok') {
+          health.lastMatchedAt = checkedAt;
+          health.firstSeenAt = null;
+          store.bankPassedIds.add(event.transaction_id);
+          store.bankFindings.delete(event.transaction_id);
+          previousHealthy = event;
+        } else if (compared.state === 'mismatch' || (compared.state === 'missing' && recordMissing)) {
+          if (health.firstSeenAt === null) health.firstSeenAt = checkedAt;
+          store.bankPassedIds.delete(event.transaction_id);
+          compared.finding = createFinding(event, actual, compared.differences || [], checkedAt, previousHealthy, health);
+          store.bankFindings.set(event.transaction_id, compared.finding);
+        } else if (compared.state === 'missing') {
+          store.bankPassedIds.delete(event.transaction_id);
+        }
+        if (compared.state === 'missing') compared.recordMissing = recordMissing;
+        store.recordHealth.set(event.transaction_id, health);
+        results.set(event.transaction_id, compared);
+        recordChallengeResult(store, event, compared);
+      }
+      store.setReconciliation();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      store.recordBankCallResult({ ok: false, error: message }, now());
+      for (const event of batchEvents) {
+        const result = { state: 'unavailable', error: message };
+        results.set(event.transaction_id, result);
+        recordChallengeResult(store, event, result);
+      }
+    }
+  }
+  return results;
+};
+
+// Check one record against the bank. Kept as a small API for callers/tests that need a single result.
+export const challengeRecord = async (store, event, fetchImpl = fetch, options = {}) => {
+  const results = await checkBankRows(store, [event.transaction_id], fetchImpl, options);
+  const state = results.get(event.transaction_id)?.state || 'unavailable';
+  return state === 'unavailable' ? 'none' : state;
+};
+
+// One scheduler step. It checks settled fresh records once and one random settled record every
+// 30 seconds. Unsettled records are never asked of the bank.
 export const runChallengeStep = async (store, {
   fetchImpl = fetch,
   nowMs = Date.now(),
-  randomEveryMs = Number(process.env.WITNESS_CHALLENGE_S || 30) * 1000,
+  randomEveryMs = BANK_RANDOM_CHECK_INTERVAL_MS,
   freshLimit = 3,
   settleMs = 30_000,
   random = Math.random
@@ -235,25 +226,34 @@ export const runChallengeStep = async (store, {
   if (store.integrityError) return;
   const records = store.committedRecords();
   if (!store.challengeBaselineSet) {
-    // Whatever was witnessed before this process started counts as already challenged, so a restart
-    // does not flood the graph.
     for (const { event } of records) store.challengedEventIds.add(event.event_id);
     store.challengeBaselineSet = true;
   }
 
-  const fresh = records.filter(({ event }) => !store.challengedEventIds.has(event.event_id)).slice(0, freshLimit);
-  for (const { event, committed_at: committedAt } of fresh) {
-    // The bank confirms a record a moment after the witness commits it; give it settleMs before
-    // calling a missing row a mismatch.
-    const settled = nowMs - Date.parse(committedAt) > settleMs;
-    const result = await challengeRecord(store, event, fetchImpl, { recordMissing: settled });
-    if (result !== 'missing' || settled) store.challengedEventIds.add(event.event_id);
+  const settled = records.filter(({ committed_at: committedAt }) => nowMs - Date.parse(committedAt) >= settleMs);
+  const fresh = settled
+    .filter(({ event }) => !store.challengedEventIds.has(event.event_id))
+    .slice(0, freshLimit);
+  if (fresh.length) {
+    const results = await checkBankRows(
+      store,
+      fresh.map(({ event }) => event.transaction_id),
+      fetchImpl,
+      { recordMissing: true, now: () => nowMs }
+    );
+    for (const { event } of fresh) {
+      const result = results.get(event.transaction_id);
+      if (result && !['unavailable', 'rate_limited'].includes(result.state)) {
+        store.challengedEventIds.add(event.event_id);
+      }
+    }
   }
 
-  if (records.length && nowMs - store.lastRandomChallengeAt >= randomEveryMs) {
+  if (settled.length && nowMs - store.lastRandomChallengeAt >= randomEveryMs) {
     store.lastRandomChallengeAt = nowMs;
-    const { event } = records[Math.floor(random() * records.length)];
-    await challengeRecord(store, event, fetchImpl);
+    const { event, committed_at: committedAt } = settled[Math.floor(random() * settled.length)];
+    const recordMissing = nowMs - Date.parse(committedAt) >= settleMs;
+    await checkBankRows(store, [event.transaction_id], fetchImpl, { recordMissing, now: () => nowMs });
   }
 };
 

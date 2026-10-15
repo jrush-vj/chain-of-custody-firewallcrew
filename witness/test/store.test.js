@@ -68,3 +68,40 @@ test('rejects conflicting reuse and commit after abort', async () => {
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('heartbeat interval starts at 30 seconds and is clamped to 15–120', () => {
+  const previous = process.env.WITNESS_HEARTBEAT_S;
+  try {
+    delete process.env.WITNESS_HEARTBEAT_S;
+    assert.equal(new WitnessStore('unused-ledger').heartbeatIntervalS, 30);
+    process.env.WITNESS_HEARTBEAT_S = '500';
+    assert.equal(new WitnessStore('unused-ledger').heartbeatIntervalS, 120);
+    process.env.WITNESS_HEARTBEAT_S = '1';
+    assert.equal(new WitnessStore('unused-ledger').heartbeatIntervalS, 15);
+  } finally {
+    if (previous === undefined) delete process.env.WITNESS_HEARTBEAT_S;
+    else process.env.WITNESS_HEARTBEAT_S = previous;
+  }
+});
+
+test('bank call pressure lengthens heartbeats and only relaxes after a clean low-usage window', () => {
+  const store = new WitnessStore('unused-ledger');
+  const start = Date.now();
+  for (let index = 0; index < 49; index += 1) store.recordBankCall(start + index);
+  assert.equal(store.heartbeatIntervalS, 60, 'more than 80% of the 60-call budget is pressure');
+
+  const afterCleanWindow = start + 15 * 60 * 1000 + 100;
+  assert.equal(store.updateHeartbeatInterval(afterCleanWindow), 30);
+});
+
+test('a 429 activates back-off and keeps the longer heartbeat until 15 clean minutes pass', () => {
+  const store = new WitnessStore('unused-ledger');
+  const now = Date.now();
+  store.recordBankCall(now);
+  store.recordBankCallResult({ ok: false, error: 'HTTP 429', retryAfterMs: 30_000 }, now);
+
+  assert.equal(store.heartbeatIntervalS, 60);
+  assert.equal(store.canCallBank(now + 29_999), false);
+  assert.equal(store.canCallBank(now + 30_001), true);
+  assert.equal(store.updateHeartbeatInterval(now + 15 * 60 * 1000 + 1), 30);
+});

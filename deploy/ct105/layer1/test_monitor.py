@@ -133,6 +133,54 @@ class Layer3TriggerTests(unittest.TestCase):
         monitor._last_contact = time.time()
         self.assertIsNone(monitor.layer3_trigger_reason())
 
+    def test_restore_polling_keeps_quarantine_timer_quiet_during_120s_heartbeats(self):
+        saved = (
+            monitor.config_guard.drift,
+            monitor._last_contact,
+            monitor.signed_request,
+            monitor.open_witness,
+            monitor.HEARTBEAT_S,
+            monitor.time,
+        )
+        clock = [1000.0]
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"pending":null}'
+
+        try:
+            monitor.config_guard.drift = lambda: []
+            monitor._last_contact = clock[0]
+            monitor.HEARTBEAT_S = 120
+            monitor.time = type("Clock", (), {"time": staticmethod(lambda: clock[0])})
+            monitor.signed_request = lambda *args: object()
+
+            def poll(request, timeout=10):
+                monitor._last_contact = clock[0]
+                return Response()
+
+            monitor.open_witness = poll
+            self.assertEqual(monitor.RESTORE_CHECK_S, 5)
+            for elapsed in range(5, 121, monitor.RESTORE_CHECK_S):
+                clock[0] = 1000.0 + elapsed
+                monitor.check_restore_request()
+                self.assertIsNone(monitor.layer3_trigger_reason())
+        finally:
+            (
+                monitor.config_guard.drift,
+                monitor._last_contact,
+                monitor.signed_request,
+                monitor.open_witness,
+                monitor.HEARTBEAT_S,
+                monitor.time,
+            ) = saved
+
     def test_simulated_cut_fails_every_witness_request_without_touching_the_network(self):
         flag = os.path.join(_dir, "witness-cut")
         monitor.CUT_FLAG = flag
@@ -147,38 +195,59 @@ class Layer3TriggerTests(unittest.TestCase):
 
 
 class Layer3ResponseTests(unittest.TestCase):
-    """respond_to_layer3: the real lockout when it's safe to do, the dry run when it is not — and it
-    must never raise, so an unsafe target can never crash the monitor's loop."""
+    """Mode and confirmation select the response without exposing unlock keys in monitor logs."""
 
-    def setUp(self):
-        self.saved_real = monitor.LAYER3_REAL_LOCKOUT
-
-    def tearDown(self):
-        monitor.LAYER3_REAL_LOCKOUT = self.saved_real
-
-    def test_calls_the_real_lockout_when_enabled(self):
-        monitor.LAYER3_REAL_LOCKOUT = True
-        fake_event = {"layer": 3, "trigger": "quarantine:locked", "detail": {"dry_run": False}}
-        with unittest.mock.patch.object(monitor.l3_lockout, "lock", return_value=(fake_event, True)) as lock:
-            with unittest.mock.patch.object(monitor.l3_quarantine, "run_dry") as run_dry:
-                event = monitor.respond_to_layer3("no contact with the witness for 50 s")
+    def test_demo_mode_keeps_the_real_demo_account_response(self):
+        with unittest.mock.patch.dict(os.environ, {"COC_L3_MODE": "demo"}, clear=False):
+            with unittest.mock.patch.object(monitor.l3_lockout, "lock", return_value=({}, True)) as lock:
+                with unittest.mock.patch.object(monitor.l3_quarantine, "run_dry") as run_dry:
+                    event = monitor.respond_to_layer3("no contact with the witness for 50 s")
         lock.assert_called_once()
+        run_dry.assert_not_called()
+        self.assertEqual(event, {})
+
+    def test_full_mode_calls_full_response_only_with_exact_confirmation(self):
+        with unittest.mock.patch.dict(os.environ, {
+            "COC_L3_MODE": "full",
+            "COC_L3_FULL_CONFIRM": "I_UNDERSTAND_ROOT_LOCKOUT",
+        }, clear=False):
+            fake_event = {"layer": 3, "trigger": "quarantine:locked"}
+            with unittest.mock.patch.object(
+                monitor.l3_lockout, "full_lock", return_value=(fake_event, {"users": ["alice"]})
+            ) as full_lock:
+                with unittest.mock.patch.object(monitor.l3_quarantine, "run_dry") as run_dry:
+                    event = monitor.respond_to_layer3("no contact with the witness for 50 s")
+        full_lock.assert_called_once()
         run_dry.assert_not_called()
         self.assertEqual(event, fake_event)
 
-    def test_falls_back_to_dry_run_when_the_demo_account_is_unsafe_or_missing(self):
-        monitor.LAYER3_REAL_LOCKOUT = True
-        with unittest.mock.patch.object(monitor.l3_lockout, "lock", side_effect=monitor.l3_lockout.UnsafeTarget("no such account")):
-            event = monitor.respond_to_layer3("approved witness link settings changed: WITNESS_URL")
+    def test_full_mode_without_confirmation_refuses_and_reports_dry_run(self):
+        with unittest.mock.patch.dict(os.environ, {"COC_L3_MODE": "full"}, clear=False):
+            os.environ.pop("COC_L3_FULL_CONFIRM", None)
+            fake_event = {"detail": {"dry_run": True}}
+            with unittest.mock.patch.object(monitor.l3_lockout, "full_lock") as full_lock:
+                with unittest.mock.patch.object(
+                    monitor.l3_quarantine, "run_dry", return_value=fake_event
+                ) as run_dry:
+                    event = monitor.respond_to_layer3("test reason")
+        full_lock.assert_not_called()
+        run_dry.assert_called_once()
+        self.assertEqual(event, fake_event)
+
+    def test_demo_mode_falls_back_to_dry_run_when_target_is_missing(self):
+        with unittest.mock.patch.dict(os.environ, {"COC_L3_MODE": "demo"}, clear=False):
+            with unittest.mock.patch.object(
+                monitor.l3_lockout, "lock", side_effect=monitor.l3_lockout.UnsafeTarget("no such account")
+            ):
+                event = monitor.respond_to_layer3("approved witness link settings changed: WITNESS_URL")
         self.assertEqual(event["detail"]["dry_run"], True)
 
-    def test_uses_the_dry_run_when_real_lockout_is_switched_off(self):
-        monitor.LAYER3_REAL_LOCKOUT = False
-        with unittest.mock.patch.object(monitor.l3_lockout, "lock") as lock:
-            event = monitor.respond_to_layer3("test reason")
-        lock.assert_not_called()
-        self.assertEqual(event["detail"]["dry_run"], True)
-
+    def test_invalid_mode_reports_dry_run(self):
+        with unittest.mock.patch.dict(os.environ, {"COC_L3_MODE": "invalid"}, clear=False):
+            with unittest.mock.patch.object(monitor.l3_quarantine, "run_dry", return_value={"dry": True}) as run_dry:
+                event = monitor.respond_to_layer3("test reason")
+        run_dry.assert_called_once()
+        self.assertEqual(event, {"dry": True})
 
 if __name__ == "__main__":
     unittest.main()

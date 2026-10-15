@@ -6,13 +6,223 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WitnessStore } from '../store.js';
-import { challengeRecord, reconcileBankTransactions, runChallengeStep } from '../reconcile.js';
+import { rowHash } from '../records.js';
+import {
+  BANK_CALL_BUDGET,
+  BANK_RANDOM_CHECK_INTERVAL_MS,
+  checkBankRows,
+  challengeRecord,
+  runChallengeStep
+} from '../reconcile.js';
 
 process.env.WITNESS_NODE_ID = 'test-node';
 process.env.WITNESS_HMAC_SECRET = 'test-secret-value-with-at-least-32-characters';
 const { createWitnessServer, checkHeartbeatSilence } = await import('../server.js');
 
-test('serves the cybersec auditor dashboard on the banking witness API', async () => {
+test('random bank checkups use a 30-second default cadence', () => {
+  assert.equal(BANK_RANDOM_CHECK_INTERVAL_MS, 30_000);
+});
+
+const seedCommittedEvents = (store, count, committedAt = new Date(Date.now() - 60_000).toISOString()) => {
+  const events = [];
+  for (let id = 1; id <= count; id += 1) {
+    const event = {
+      event_id: `event-${id}`,
+      transaction_id: id,
+      type: 'deposit',
+      amount_minor: id * 100,
+      occurred_at: '2026-10-14T10:00:00.000Z'
+    };
+    store.events.set(event.event_id, { event, state: 'committed', updated_at: committedAt });
+    events.push(event);
+  }
+  return events;
+};
+
+const bankResponse = (events, ids) => new Response(JSON.stringify({
+  transactions: ids.map((id) => {
+    const event = events.find(({ transaction_id }) => transaction_id === id);
+    return {
+      transaction_id: id,
+      type: event.type,
+      amount_minor: String(event.amount_minor),
+      event_id: event.event_id
+    };
+  })
+}), { status: 200 });
+
+test('subset bank checks never exceed 60 calls in a simulated 15-minute window', async () => {
+  const store = new WitnessStore('/tmp/unused-witness-ledger');
+  const events = seedCommittedEvents(store, BANK_CALL_BUDGET + 5);
+  let calls = 0;
+  const base = Date.now();
+  for (const [index, event] of events.entries()) {
+    const allowed = index < BANK_CALL_BUDGET;
+    const result = await checkBankRows(store, [event.transaction_id], async (url) => {
+      calls += 1;
+      const ids = url.searchParams.get('transaction_ids').split(',').map(Number);
+      return bankResponse(events, ids);
+    }, { now: () => base + calls * 1000 });
+    assert.equal(result.get(event.transaction_id).state, allowed ? 'ok' : 'rate_limited');
+  }
+  assert.equal(calls, BANK_CALL_BUDGET);
+  assert.equal(store.bankCallLog.length, BANK_CALL_BUDGET);
+  assert.equal(store.status().bank_reconciliation.rate_limited, true);
+  assert.equal(store.status().bank_reconciliation.bank_calls_last_15m, BANK_CALL_BUDGET);
+  assert.equal(store.bankFindings.size, 0, 'budget skips are not recorded as missing bank rows');
+  assert.equal(await challengeRecord(store, events[BANK_CALL_BUDGET], async () => {
+    throw new Error('budget should prevent this request');
+  }), 'rate_limited');
+});
+
+test('subset checks split requested IDs into batches of at most 100', async () => {
+  const store = new WitnessStore('/tmp/unused-witness-ledger');
+  const events = seedCommittedEvents(store, 205);
+  const sizes = [];
+  await checkBankRows(store, events.map((event) => event.transaction_id), async (url) => {
+    const ids = url.searchParams.get('transaction_ids').split(',').map(Number);
+    sizes.push(ids.length);
+    return bankResponse(events, ids);
+  });
+  assert.deepEqual(sizes, [100, 100, 5]);
+  assert.equal(store.status().bank_reconciliation.checked_transactions, 205);
+});
+
+test('HTTP 429 records back-off and a rate-limited challenge without a Layer 2 mismatch', async () => {
+  const store = new WitnessStore('/tmp/unused-witness-ledger');
+  const [event] = seedCommittedEvents(store, 2);
+  let calls = 0;
+  const limited = await challengeRecord(store, event, async () => {
+    calls += 1;
+    return new Response('', { status: 429, headers: { 'Retry-After': '45' } });
+  });
+  assert.equal(limited, 'rate_limited');
+  assert.ok(store.bankBackoffUntil >= Date.now() + 44_000);
+
+  const skipped = await checkBankRows(store, [2], async () => {
+    calls += 1;
+    return bankResponse([event], [2]);
+  });
+  assert.equal(skipped.get(2).state, 'rate_limited');
+  assert.equal(calls, 1, 'the witness waits through Retry-After');
+  assert.equal(store.status().bank_reconciliation.rate_limited, true);
+  assert.equal(store.bankFindings.size, 0);
+  assert.ok(store.recentActivity().some((item) =>
+    item.kind === 'challenge_issued' && item.detail.includes('rate limited by the bank')
+  ));
+  assert.equal(store.recentActivity().some((item) => item.kind === 'challenge_mismatch'), false);
+});
+
+test('random checkups ignore records that have not settled yet', async () => {
+  const store = new WitnessStore('/tmp/unused-witness-ledger');
+  seedCommittedEvents(store, 1, new Date().toISOString());
+  let calls = 0;
+  await runChallengeStep(store, {
+    nowMs: Date.now(),
+    settleMs: 30_000,
+    randomEveryMs: 1,
+    random: () => 0,
+    fetchImpl: async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ transactions: [] }), { status: 200 });
+    }
+  });
+  assert.equal(calls, 0);
+  assert.equal(store.bankFindings.size, 0);
+  assert.equal(store.recentActivity().some((item) => item.kind === 'challenge_mismatch'), false);
+});
+
+test('a heartbeat-flagged hash suspect is checked against the bank', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-suspect-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const event = {
+    event_id: 'c80ba038-26ef-4d2f-84a8-e504a67ec7e6',
+    transaction_id: 1,
+    type: 'deposit',
+    amount_minor: 50000,
+    occurred_at: '2026-10-14T10:00:00.000Z'
+  };
+  await store.prepare(event);
+  await store.transition(event.event_id, 'commit');
+  const copy = {
+    id: 1,
+    type: 'deposit',
+    amount: '500.00',
+    status: 'completed',
+    from_account_id: null,
+    to_account_id: 1,
+    timestamp: '2026-10-14 10:00:00',
+    baseline: true
+  };
+  store.copies.set(1, copy);
+  store.baselineMaxId = 1;
+  store.baselineComplete = true;
+
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const originalFetch = globalThis.fetch;
+  const oldUrl = process.env.BANK_RECONCILE_URL;
+  process.env.BANK_RECONCILE_URL = 'https://bank.example.test/api/transactions/witness-reconcile';
+  let bankCalls = 0;
+  globalThis.fetch = async (input, options) => {
+    const url = input instanceof URL ? input : new URL(input);
+    if (url.hostname === 'bank.example.test') {
+      bankCalls += 1;
+      assert.equal(url.searchParams.get('transaction_ids'), '1');
+      return new Response(JSON.stringify({
+        transactions: [{
+          transaction_id: 1,
+          type: event.type,
+          amount_minor: String(event.amount_minor),
+          event_id: event.event_id
+        }]
+      }), { status: 200 });
+    }
+    return originalFetch(input, options);
+  };
+
+  try {
+    const payload = {
+      seq: Date.now(),
+      bank: {
+        count: 1,
+        max_id: 1,
+        ranges: '1',
+        sweep: [[1, 'f'.repeat(32)]]
+      }
+    };
+    const body = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const signature = createHmac('sha256', process.env.WITNESS_HMAC_SECRET)
+      .update(`POST\n/v1/heartbeat\n${timestamp}\n${body}`)
+      .digest('hex');
+    const response = await originalFetch(`http://127.0.0.1:${server.address().port}/v1/heartbeat`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-witness-node': process.env.WITNESS_NODE_ID,
+        'x-witness-timestamp': timestamp,
+        'x-witness-signature': signature
+      },
+      body
+    });
+    const result = await response.json();
+    assert.equal(response.status, 200);
+    assert.deepEqual(result.sync.suspect_ids, [1]);
+    assert.equal(bankCalls, 1);
+    assert.equal(store.bankFindings.size, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldUrl === undefined) delete process.env.BANK_RECONCILE_URL;
+    else process.env.BANK_RECONCILE_URL = oldUrl;
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('serves the integration auditor dashboard with the restore control', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-dashboard-'));
   const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
   await store.initialize();
@@ -26,6 +236,10 @@ test('serves the cybersec auditor dashboard on the banking witness API', async (
 
     assert.equal(response.status, 200);
     assert.match(html, /Chain of Custody · Witness/);
+    assert.match(html, /Restore to normal/);
+    assert.match(html, /bank rate-limited/);
+    assert.match(html, /Witness bank calls \/ 15 min/);
+    assert.match(html, /fetch\("\/v1\/restore-request"/);
     assert.match(html, /class="nm">Custom commands</);
     assert.match(html, /class="nm">Heartbeat &amp; checksum</);
     assert.match(html, /class="nm">Quarantine</);
@@ -41,6 +255,7 @@ test('serves the cybersec auditor dashboard on the banking witness API', async (
     assert.equal(status.checks.B, 'unknown');
     assert.deepEqual(status.layers, { 1: 'off', 2: 'on', 3: 'on' });
     assert.equal(status.bank_reconciliation.checked_at, null);
+    assert.equal(status.bank_reconciliation.bank_calls_last_15m, 0);
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });
@@ -139,9 +354,10 @@ test('accepts authenticated prepare/commit and publishes a safe event view', asy
 
     store.setReconciliationUnavailable('bank API unavailable');
     const unavailable = await (await fetch(`${baseUrl}/status`)).json();
-    assert.equal(unavailable.connection, 'lost');
-    assert.equal(unavailable.state, 'unknown');
-    assert.equal(unavailable.bank_reconciliation.state, 'unavailable');
+    assert.equal(unavailable.connection, 'connected', 'existing findings remain visible while a later call fails');
+    assert.equal(unavailable.state, 'alert');
+    assert.equal(unavailable.bank_reconciliation.state, 'mismatch');
+    assert.equal(unavailable.bank_reconciliation.last_error, 'bank API unavailable');
     assert.equal(unavailable.bank_reconciliation.last_successful_check !== null, true);
 
     const approval = await fetch(`${baseUrl}/quarantine/approve`, {
@@ -168,7 +384,7 @@ test('accepts authenticated prepare/commit and publishes a safe event view', asy
     assert.equal(abort.status, 200);
     assert.equal((await abort.json()).state, 'aborted');
     const statusAfterAbort = await (await fetch(`${baseUrl}/status`)).json();
-    assert.equal(statusAfterAbort.last_verified.seq, event.transaction_id);
+    assert.equal(statusAfterAbort.last_verified, null, 'the latest record was not a successful bank check');
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });
@@ -190,7 +406,7 @@ test('serves an integrity alert and disables writes when the ledger is altered',
       occurred_at: '2026-10-14T10:00:00.000Z'
     });
 
-    test('detects changed or missing bank rows during independent reconciliation', async () => {
+    test('detects changed or missing rows in a requested subset', async () => {
       const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-reconcile-'));
       const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
       process.env.BANK_RECONCILE_URL = 'https://bank.example.test/api/transactions/witness-reconcile';
@@ -210,7 +426,7 @@ test('serves an integrity alert and disables writes when the ledger is altered',
           await store.transition(eventId, 'commit');
         }
 
-        const result = await reconcileBankTransactions(store, async (url) => {
+        const results = await checkBankRows(store, [12, 13], async (url) => {
           assert.equal(url.hostname, 'bank.example.test');
           assert.equal(url.pathname, '/api/transactions/witness-reconcile');
           return new Response(JSON.stringify({
@@ -223,9 +439,9 @@ test('serves an integrity alert and disables writes when the ledger is altered',
           }), { status: 200 });
         });
 
-        assert.equal(result.state, 'mismatch');
+        assert.equal(store.status().bank_reconciliation.state, 'mismatch');
         assert.deepEqual(
-          result.mismatches.map(({ transaction_id, issue }) => ({ transaction_id, issue })),
+          [...store.bankFindings.values()].map(({ transaction_id, issue }) => ({ transaction_id, issue })),
           [
             { transaction_id: 12, issue: 'changed_amount' },
             { transaction_id: 13, issue: 'missing' }
@@ -362,18 +578,18 @@ test('records heartbeats and challenge entries from bank reconciliation', async 
   };
   await store.prepare(event);
   await store.transition(event.event_id, 'commit');
-  const bankReturns = (transactions) => async () => ({ ok: true, json: async () => ({ transactions }) });
+  const bankReturns = (transactions) => async () => new Response(JSON.stringify({ transactions }), { status: 200 });
   const matching = [{ transaction_id: 21, type: 'deposit', amount_minor: '50000', event_id: event.event_id }];
 
-  await reconcileBankTransactions(store, bankReturns(matching));
+  await checkBankRows(store, [21], bankReturns(matching));
   assert.ok(!store.recentActivity().some((item) => item.kind === 'heartbeat'), 'heartbeats come from ct105, not the reconcile pass');
 
-  await reconcileBankTransactions(store, bankReturns([{ ...matching[0], amount_minor: '10000' }]));
+  await checkBankRows(store, [21], bankReturns([{ ...matching[0], amount_minor: '10000' }]));
   assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_mismatch' && item.detail.includes('record #21')));
 
-  await reconcileBankTransactions(store, bankReturns(matching));
+  await checkBankRows(store, [21], bankReturns(matching));
   assert.ok(store.recentActivity().some((item) => item.kind === 'challenge_ok'));
-  assert.equal(store.reportedMismatches.size, 0);
+  assert.equal(store.bankFindings.size, 0);
 });
 
 test('queues a website restore request, rate-limits it, and records the ct105 acknowledgement', async () => {
@@ -475,13 +691,32 @@ ${body}`)
     assert.equal(status.heartbeat_interval, 30);
     assert.ok(store.recentActivity().some((item) => item.kind === 'heartbeat'));
 
+    let bankCalls = 0;
+    for (let index = 0; index < 10; index += 1) {
+      assert.equal((await beat({ seq: 2000 + index })).status, 200);
+      await runChallengeStep(store, {
+        fetchImpl: async () => {
+          bankCalls += 1;
+          return new Response(JSON.stringify({ transactions: [] }), { status: 200 });
+        },
+        nowMs: Date.now() + index * 1000
+      });
+    }
+    assert.equal(bankCalls, 0, 'heartbeats without transactions or reported suspects do not call the bank');
+    assert.equal(store.bankCallLog.length, 0);
+
+    for (let index = 0; index < 49; index += 1) store.recordBankCall(Date.now() - 1000);
+    const pressuredBeat = await beat({ seq: 2010 });
+    assert.equal((await pressuredBeat.json()).interval_s, 60);
+    assert.equal(store.lastHeartbeatPromisedS, 60);
+
     assert.equal(await checkHeartbeatSilence(store, Date.now() + 10_000), false, 'within three intervals');
     assert.equal(await checkHeartbeatSilence(store, Date.now() + 200_000), true, 'three beats missed');
     assert.equal((await silenceAlerts()).length, 1);
     assert.equal((await (await fetch(`${baseUrl}/status`)).json()).connection, 'lost');
     assert.equal(await checkHeartbeatSilence(store, Date.now() + 300_000), false, 'no duplicate while open');
 
-    assert.equal((await beat({ seq: 1001 })).status, 200);
+    assert.equal((await beat({ seq: 2011 })).status, 200);
     assert.equal((await silenceAlerts()).length, 0, 'a new heartbeat clears the alert');
     const timeline = (await (await fetch(`${baseUrl}/timeline`)).json()).events;
     assert.ok(timeline.some((event) => event.trigger === 'heartbeat_silence' && event.resolved === true), 'history stays');
@@ -489,6 +724,20 @@ ${body}`)
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('heartbeat silence uses the interval promised by the latest witness response', async () => {
+  const store = new WitnessStore('/tmp/unused-witness-ledger');
+  store.lastHeartbeatAt = 1_000;
+  store.lastHeartbeatPromisedS = 120;
+  store.recordLayerEvent = async (event) => {
+    store.layerEvents.push(event);
+    return event;
+  };
+  assert.equal(await checkHeartbeatSilence(store, 1_000 + 359_000), false);
+  assert.equal(await checkHeartbeatSilence(store, 1_000 + 361_000), true);
+  const silence = store.recentLayerEvents().find((event) => event.kind === 'silence');
+  assert.equal(silence.detail.expected_every_s, 120);
 });
 
 test('a real (non-dry-run) lockout cannot be claimed released by website approval alone', async () => {
@@ -651,20 +900,21 @@ test('challenge steps keep a crest and trough every interval and react to new tr
     const first = await witnessEvent('22222222-2222-4222-8222-222222222222', 41);
     const options = (rows, extra = {}) => ({ fetchImpl: bank(rows), randomEveryMs: 30_000, random: () => 0, ...extra });
     const asks = () => store.recentActivity().filter((item) => item.kind === 'challenge_issued').length;
+    const start = Date.now() + 60_000;
 
-    await runChallengeStep(store, options([matching(first)], { nowMs: 1_000_000 }));
+    await runChallengeStep(store, options([matching(first)], { nowMs: start }));
     assert.equal(asks(), 1, 'the first step challenges one random record straight away');
     assert.equal(store.challengedEventIds.has(first.event_id), true, 'records witnessed before start are not replayed as fresh');
 
-    await runChallengeStep(store, options([matching(first)], { nowMs: 1_010_000 }));
+    await runChallengeStep(store, options([matching(first)], { nowMs: start + 10_000 }));
     assert.equal(asks(), 1, 'nothing new and under 30 s since the last one');
 
-    await runChallengeStep(store, options([matching(first)], { nowMs: 1_031_000 }));
+    await runChallengeStep(store, options([matching(first)], { nowMs: start + 31_000 }));
     assert.equal(asks(), 2, 'a random challenge every 30 s even when idle');
 
     // New traffic: a record witnessed now is challenged within one step, not 30 s later.
     const second = await witnessEvent('33333333-3333-4333-8333-333333333333', 42);
-    await runChallengeStep(store, options([matching(first), matching(second)], { nowMs: 1_033_000 }));
+    await runChallengeStep(store, options([matching(first), matching(second)], { nowMs: start + 33_000 }));
     const answered = store.recentActivity().filter((item) => item.kind === 'challenge_ok' && item.detail.includes('record #42'));
     assert.equal(answered.length, 1, 'the new transaction is verified against the bank straight away');
 
@@ -704,7 +954,7 @@ test('a tamper is reported with the last healthy record and the window in which 
     const one = await witnessEvent('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 1, 10000);
     const two = await witnessEvent('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 2, 20000);
     const three = await witnessEvent('cccccccc-cccc-4ccc-8ccc-cccccccccccc', 3, 30000);
-    const pass = (rows) => reconcileBankTransactions(store, bank(rows));
+    const pass = (rows) => checkBankRows(store, [1, 2, 3], bank(rows));
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
     await pass([matching(one), matching(two), matching(three)]);
