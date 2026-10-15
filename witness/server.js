@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WitnessStore } from './store.js';
-import { checkBankRows, startChallenges } from './reconcile.js';
+import { recheckPendingBankRows, startChallenges } from './reconcile.js';
 import { amountMinor } from './records.js';
 import { evaluateHeartbeat, evidenceMismatches, receiveRows, recordCounts } from './banksync.js';
 
@@ -601,8 +601,9 @@ export const createWitnessServer = (store) =>
         if (payload.bank !== undefined) {
           try {
             reply.sync = await evaluateHeartbeat(store, payload.bank);
-            if (reply.sync.suspect_ids.length) {
-              await checkBankRows(store, reply.sync.suspect_ids);
+            // Pending ids include anything a budget or back-off skipped on an earlier beat, so they retry here.
+            if (store.bankPendingIds.size > 0) {
+              await recheckPendingBankRows(store);
               reply.interval_s = store.updateHeartbeatInterval();
             }
           } catch (error) {

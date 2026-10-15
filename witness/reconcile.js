@@ -78,8 +78,19 @@ const checkResultFor = (event, actual) => {
     : { state: 'ok', finding: null, differences: [] };
 };
 
+// The fields the record-copy check says changed for this record, or null. The bank's four fields cannot
+// see a status change, so a record can match the bank and still be flagged by its copy.
+const copyFlagFields = (store, recordId) => {
+  const item = store.openEvidence('entry_edited', recordId);
+  return item ? String(item.detail?.fields || 'unknown fields') : null;
+};
+
 const recordChallengeResult = (store, event, result) => {
-  if (result.state === 'ok') {
+  if (result.state === 'ok' && result.copyFields) {
+    // Never a green "matches the bank" for a record the copies have flagged.
+    store.recordChallenge(event.transaction_id, 'mismatch',
+      `four fields match the bank; record copy differs: ${result.copyFields}`);
+  } else if (result.state === 'ok') {
     store.recordChallenge(event.transaction_id, 'ok', 'matches the bank');
   } else if (result.state === 'mismatch') {
     const issue = result.finding?.issue || `changed_${result.differences.join('_')}`;
@@ -176,9 +187,15 @@ export const checkBankRows = async (store, ids, fetchImpl = fetch, { recordMissi
         if (compared.state === 'ok') {
           health.lastMatchedAt = checkedAt;
           health.firstSeenAt = null;
-          store.bankPassedIds.add(event.transaction_id);
           store.bankFindings.delete(event.transaction_id);
-          previousHealthy = event;
+          compared.copyFields = copyFlagFields(store, event.transaction_id);
+          if (compared.copyFields) {
+            // Four fields match, but the copy says the record changed: not verified, not a healthy anchor.
+            store.bankPassedIds.delete(event.transaction_id);
+          } else {
+            store.bankPassedIds.add(event.transaction_id);
+            previousHealthy = event;
+          }
         } else if (compared.state === 'mismatch' || (compared.state === 'missing' && recordMissing)) {
           if (health.firstSeenAt === null) health.firstSeenAt = checkedAt;
           store.bankPassedIds.delete(event.transaction_id);
@@ -203,6 +220,30 @@ export const checkBankRows = async (store, ids, fetchImpl = fetch, { recordMissi
       }
     }
   }
+  return results;
+};
+
+// Asks the bank about every pending record (heartbeat suspects, and findings whose row is back again).
+// A record leaves the pending set only on a definitive answer; a budget skip or back-off keeps it for
+// the next heartbeat. Records that are no longer committed are dropped with their findings.
+export const recheckPendingBankRows = async (store, fetchImpl = fetch, options = {}) => {
+  const committed = new Set(store.committedEvents().map((event) => event.transaction_id));
+  for (const id of [...store.bankPendingIds]) {
+    if (!committed.has(id)) {
+      store.bankPendingIds.delete(id);
+      store.bankFindings.delete(id);
+      store.bankPassedIds.delete(id);
+    }
+  }
+  const ids = [...store.bankPendingIds];
+  if (ids.length === 0) return new Map();
+  const results = await checkBankRows(store, ids, fetchImpl, options);
+  for (const [id, result] of results) {
+    if (result.state !== 'rate_limited' && result.state !== 'unavailable') {
+      store.bankPendingIds.delete(id);
+    }
+  }
+  store.setReconciliation();
   return results;
 };
 
