@@ -66,6 +66,29 @@ witness cannot reach back into ct105 to unlock anything. For a real lockout, cli
 the approval but says so explicitly; the account is only actually restored by running `unlock.sh` on
 ct105 with the real keys.
 
+## The full response (every user, including root) — built, not enabled
+
+`l3_full_lockout.py` implements the original design in full: `touch /etc/nologin`, `passwd -l` and
+`usermod --expiredate 1` for every configured user (default: auto-discovered from `/etc/passwd`,
+root plus every account with uid >= 1000 and a real shell — override with
+`COC_L3_FULL_USERS=root,alice,...`), every login session ended, and real site-down/site-up commands
+against the banking `docker-compose.yml`. It is a separate module from `l3_lockout.py` above:
+`monitor.py`'s automatic trigger never calls it, and `lockout.sh`/`unlock.sh` never touch it.
+
+It is reachable only through `full-lockout.sh` / `full-unlock.sh`, and defaults to a dry run (prints
+every command, changes nothing). Running it for real needs `--real`, the environment variable
+`COC_I_HAVE_VERIFIED_RECOVERY=1`, and typing a confirmation phrase — all three, every time.
+
+**Do not set that environment variable, or run `--real`, on ct105 before:**
+1. Reading [`RECOVERY.md`](./RECOVERY.md) — locking out root also removes SSH, and if the network
+   is cut too (the usual Layer 3 trigger), nothing gets you back in except a path that does not
+   depend on the guest's own network or login system.
+2. Following [`TEST-ON-CLONE.md`](./TEST-ON-CLONE.md) — clone ct105, lock the clone for real with
+   its network cut, confirm you can still get back in and unlock it, then destroy the clone.
+
+Only once both of those are actually done, not assumed, does enabling this on the real host make
+sense.
+
 ## "Restore to normal"
 
 The website's "Restore to normal" button (via `monitor.py`'s poll of `/v1/restore-pending`) restores

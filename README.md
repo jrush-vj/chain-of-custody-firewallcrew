@@ -90,3 +90,52 @@ interfaces, ledger, Cloudflare routing, and banking services.
 
 See [`witness/README.md`](./witness/README.md) for the live routes, deployment
 update steps, and integration limits.
+
+## How the chain of custody works
+
+Three pieces, each with one job:
+
+- **Platform** — the thing being protected (the banking app). It is not modified for this to work;
+  a read-only database role and one small adapter config are the only things added to it.
+- **Agent** — a small program on the same machine as the platform (`deploy/ct105/layer1/monitor.py`
+  on ct105). It reads new transactions, puts a tamper-evident seal on each one, and sends the seal
+  away. Think of it as a notary stamping every entry and keeping a copy of the stamp.
+- **Witness** — a separate machine the platform's own admin cannot reach into (the Oracle VPS). It
+  receives the stamps and checks them. Think of it as an auditor who keeps the stamps in a locked
+  box no one else holds the key to.
+
+**How the agent reads the platform's data.** A database role (`coc_reader`) can only `SELECT` a
+fixed, narrow list of columns — never write anything, never read customer names, IBANs, account
+numbers, or free-text fields. It's a window into the ledger, not a key to the vault. Which table
+and columns to read is the only platform-side configuration; the platform's own code is untouched.
+
+**How the seal works.** Each transaction is turned into a fingerprint and signed with the agent's
+private key, which never leaves the platform machine — the witness only ever gets the matching
+public key, which can check a signature but not create one. Each seal also carries the fingerprint
+of the previous seal, so the records form a chain: changing one entry breaks every seal after it.
+
+**What the witness does.** It stores the seals (never passwords, never customer details), checks
+every signature and the chain, and asks the agent random questions — "what's record 42?", "what's
+account 2's balance?" — comparing the answer against its own sealed copy. A mismatch is reported
+with exactly what changed.
+
+**What "the platform locks itself down" means, and the two ways this is built here.** If the
+witness hasn't heard from the platform for 45 seconds, the platform assumes its own network was cut
+to hide something. Two different responses exist for this, on purpose kept separate:
+
+- **The live one, used for demos:** locks out one dedicated, non-privileged demo account only.
+  Never root, never any other login. See [`deploy/ct105/layer3/README.md`](./deploy/ct105/layer3/README.md).
+- **The full design** — locking out every user including root, site down, every banking session
+  revoked — is built (`deploy/ct105/layer3/l3_full_lockout.py`) but **not enabled** on the real
+  host. Locking out root removes SSH access too, so a verified way back in that does not depend on
+  the guest's own network or login system has to exist first. See
+  [`deploy/ct105/layer3/RECOVERY.md`](./deploy/ct105/layer3/RECOVERY.md) and
+  [`deploy/ct105/layer3/TEST-ON-CLONE.md`](./deploy/ct105/layer3/TEST-ON-CLONE.md) for exactly what
+  has to be proven, on a clone, before that changes.
+
+**Setting this up on a new platform, in order:**
+1. Create the read-only database user.
+2. Fill in the adapter config with that platform's table and column names.
+3. Install the agent.
+4. Register it with a witness.
+5. Test it: make a transaction, watch it show up as verified on the witness.
