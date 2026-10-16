@@ -9,8 +9,8 @@ ENV NODE_ENV=production \
     PORT=8080
 COPY --from=deps --chown=node:node /app/node_modules ./node_modules
 COPY --chown=node:node . .
-# Run as the unprivileged node user; files stay owned by node so `docker cp` hot-patches
-# (deploy/ct105/coc.sh) remain writable.
+# Run as the unprivileged node user. `docker cp` hot-patches (deploy/ct105/coc.sh) still work:
+# the Docker daemon writes the files, and node only needs to read them.
 USER node
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
