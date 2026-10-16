@@ -9,9 +9,13 @@
 #   bash deploy/local/test-stack.sh layer2    create the coc_reader role and prove its limits (real psql)
 #   bash deploy/local/test-stack.sh traffic   run the traffic simulator for a few real transactions
 #   bash deploy/local/test-stack.sh hotpatch  exercise coc.sh hotpatch for backend and frontend
-#   bash deploy/local/test-stack.sh witness-restart   reattach the witness after any backend restart
-#   bash deploy/local/test-stack.sh all       up + every check above
-#   bash deploy/local/test-stack.sh down      stop and delete the stack, its volumes and the throwaway .env
+#   bash deploy/local/test-stack.sh lab-up    build and start the lab container + monitor.py
+#   bash deploy/local/test-stack.sh attack N  run Layer N attack from the lab (1, 2 or 3)
+#   bash deploy/local/test-stack.sh restore   run restore-normal.sh from the lab
+#   bash deploy/local/test-stack.sh lab-shell interactive shell inside the lab container
+#   bash deploy/local/test-stack.sh lab-logs  tail monitor.py logs from the lab background
+#   bash deploy/local/test-stack.sh all       up + every check above + lab-up
+#   bash deploy/local/test-stack.sh down      stop and delete the stack, its volumes, lab and .env
 #
 # Ports (loopback only): 3001 site, 8081 backend, 8787 witness, 5432 postgres.
 set -Eeuo pipefail
@@ -107,8 +111,66 @@ cmd_hotpatch() {
   WITNESS_HEALTH_URL=http://127.0.0.1:8787/health bash "$repo/deploy/ct105/coc.sh" status
 }
 
+cmd_lab_up() {
+  say "building and starting the lab container (ct105-ai standin)"
+  docker build -q -t coc-lab "$here/lab"
+  # Confirm coc_reader role exists.
+  cmd_layer2 > /dev/null 2>&1 || true
+  # Start the lab as a background daemon.
+  local repo_path="$repo"
+  if command -v cygpath >/dev/null 2>&1; then repo_path="$(cygpath -m "$repo")"; fi
+  docker run -d --name coc-lab --hostname ct105-ai \
+    --network "container:banking-backend" \
+    -v "$repo_path":/opt/chain-of-custody:ro \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -e COMPOSE_FILE=docker-compose.yml:docker-compose.local.yml \
+    coc-lab sleep infinity >/dev/null
+  say "lab container started. Setting up wrappers and baselines..."
+  # Source monitor env, run install-wrappers, approve baselines, start monitor.
+  docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody' || true
+  docker exec coc-lab bash /opt/chain-of-custody/deploy/ct105/layer1/install-wrappers.sh > /dev/null 2>&1 || true
+  docker exec coc-lab python3 /opt/chain-of-custody/deploy/ct105/layer3/l3_config_guard.py approve > /dev/null 2>&1 || true
+  say "starting monitor.py in the lab (background)"
+  docker exec -d coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && exec python3 /opt/chain-of-custody/deploy/ct105/layer1/monitor.py run' || true
+  sleep 3
+  if docker exec coc-lab curl -s http://127.0.0.1:8787/status 2>/dev/null | jq .connection 2>/dev/null | grep -q connected; then
+    say "lab healthy and connected to witness"
+  else
+    say "lab started but connection check inconclusive (monitor may still be initializing)"
+  fi
+}
+
+cmd_attack() {
+  local layer="${1:-}"; shift || true
+  [ -n "$layer" ] || { echo "usage: test-stack.sh attack 1|2|3 [args]"; exit 2; }
+  say "running Layer $layer attack from lab"
+  docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && exec bash /opt/chain-of-custody/deploy/ct105/coc.sh attack '"$layer"' '"$(printf '%s ' "$@")"
+  if [ "$layer" = 3 ]; then
+    restart_witness
+  fi
+}
+
+cmd_restore() {
+  say "running restore-normal.sh from lab"
+  docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && exec bash /opt/chain-of-custody/deploy/ct105/restore-normal.sh' || true
+  if docker ps --format '{{.Names}}' | grep -q banking-backend; then
+    restart_witness
+  fi
+}
+
+cmd_lab_shell() {
+  say "entering lab shell (type exit to leave)"
+  docker exec -it coc-lab bash -c 'cd /opt/chain-of-custody && bash'
+}
+
+cmd_lab_logs() {
+  say "monitor.py background output from lab (Ctrl-C to stop)"
+  docker logs -f coc-lab 2>&1 || true
+}
+
 cmd_down() {
-  say "removing the local stack"
+  say "removing the local stack and lab"
+  docker rm -f coc-lab 2>/dev/null || true
   compose down -v --remove-orphans || true
   if [ -f "$env_file" ] && grep -qF "$marker" "$env_file"; then rm -f "$env_file"; echo "removed throwaway .env"; fi
 }
@@ -121,7 +183,12 @@ case "${1:-}" in
   traffic) cmd_traffic ;;
   hotpatch) cmd_hotpatch ;;
   witness-restart) restart_witness ;;
-  all) cmd_up; cmd_unit; cmd_layer2; cmd_test; cmd_traffic; cmd_hotpatch ;;
+  lab-up) cmd_lab_up ;;
+  attack) shift; cmd_attack "$@" ;;
+  restore) cmd_restore ;;
+  lab-shell) cmd_lab_shell ;;
+  lab-logs) cmd_lab_logs ;;
+  all) cmd_up; cmd_unit; cmd_layer2; cmd_test; cmd_traffic; cmd_hotpatch; cmd_lab_up ;;
   down) cmd_down ;;
-  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

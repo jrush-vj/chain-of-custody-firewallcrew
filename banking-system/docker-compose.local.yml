@@ -23,6 +23,8 @@ services:
       WITNESS_DATA_PATH: /data/ledger.jsonl
       WITNESS_BIND_HOST: 0.0.0.0
       BANK_RECONCILE_URL: http://127.0.0.1:8080/api/transactions/witness-reconcile
+      WITNESS_LAYER1_ENABLED: ${WITNESS_LAYER1_ENABLED:-1}
+      WITNESS_UNWITNESSED_GRACE_S: ${WITNESS_UNWITNESSED_GRACE_S:-20}
     volumes:
       - ../witness:/witness:ro
       - witness_data:/data
