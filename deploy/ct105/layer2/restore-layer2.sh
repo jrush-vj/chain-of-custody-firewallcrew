@@ -24,6 +24,17 @@ psql_q() { docker compose exec -T postgres psql -U "$DB_USER" -d "$db" -tA -F'|'
 
 failed=0
 while IFS=$'\t' read -r when id field old new; do
+  # Journal values are spliced into SQL, so accept only the exact shapes the attack script writes.
+  if ! [[ "$id" =~ ^[0-9]+$ ]]; then
+    echo "skipping malformed journal entry (id): $when"; failed=1; continue
+  fi
+  case "$field" in
+    amount) value_re='^[0-9]+(\.[0-9]{1,2})?$' ;;
+    *)      value_re='^[a-z_]{1,20}$' ;;
+  esac
+  if ! [[ "$old" =~ $value_re && "$new" =~ $value_re ]]; then
+    echo "skipping malformed journal entry for transaction #$id ($field)"; failed=1; continue
+  fi
   case "$field" in
     amount) sql="UPDATE transactions SET amount = $old WHERE id = $id AND amount = $new RETURNING id;" ;;
     type)   sql="UPDATE transactions SET type = '$old' WHERE id = $id AND type = '$new' RETURNING id;" ;;

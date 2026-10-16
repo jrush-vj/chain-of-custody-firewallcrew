@@ -9,10 +9,13 @@ import {
   externalOutgoingValidation
 } from '../middleware/validation.js';
 import { requireExternalApiKey } from '../middleware/externalApiKey.js';
+import { requireWitnessReconcileAuth } from '../middleware/witnessReconcileAuth.js';
 import { executeWitnessedTransaction } from '../services/witnessedTransactions.js';
 import { getPool } from '../config/database.js';
 
 const router = express.Router();
+
+const TRANSACTION_TYPES = ['deposit', 'withdrawal', 'transfer', 'external_incoming', 'external_outgoing'];
 
 const sendTransactionResult = (res, result, message, details = {}) =>
   res.status(result.pendingWitness ? 202 : 201).json({
@@ -96,7 +99,7 @@ router.post(
   }
 );
 
-router.get('/witness-reconcile', async (req, res, next) => {
+router.get('/witness-reconcile', requireWitnessReconcileAuth, async (req, res, next) => {
   try {
     const rawIds = req.query.transaction_ids;
     if (typeof rawIds !== 'string') {
@@ -172,13 +175,24 @@ router.use(authenticateToken);
  */
 router.get('/', async (req, res, next) => {
   try {
-    const { type, startDate, endDate, page = 1, limit = 20 } = req.query;
+    const { type, startDate, endDate } = req.query;
+    // Bounded pagination: an unbounded or non-numeric limit could dump or stall the whole table.
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+    if (type !== undefined && !TRANSACTION_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'Invalid transaction type filter' });
+    }
+    const parsedStart = startDate ? new Date(startDate) : null;
+    const parsedEnd = endDate ? new Date(endDate) : null;
+    if ((parsedStart && Number.isNaN(parsedStart.getTime())) || (parsedEnd && Number.isNaN(parsedEnd.getTime()))) {
+      return res.status(400).json({ error: 'startDate and endDate must be valid dates' });
+    }
     const filters = {
       type,
-      startDate: startDate ? new Date(startDate) : null,
-      endDate: endDate ? new Date(endDate) : null,
-      offset: (parseInt(page) - 1) * parseInt(limit),
-      limit: parseInt(limit)
+      startDate: parsedStart,
+      endDate: parsedEnd,
+      offset: (page - 1) * limit,
+      limit
     };
 
     const transactions = await Transaction.findByUserId(req.user.id, filters);
@@ -187,10 +201,10 @@ router.get('/', async (req, res, next) => {
     res.json({
       transactions,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total,
-        pages: Math.ceil(total / parseInt(limit))
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (error) {

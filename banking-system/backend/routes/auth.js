@@ -1,4 +1,5 @@
 import express from 'express';
+import bcrypt from 'bcryptjs';
 import { User } from '../models/User.js';
 import { authenticateToken } from '../middleware/auth.js';
 import {
@@ -16,7 +17,7 @@ import {
 import {
   createPendingTwoFactorToken,
   createSessionToken,
-  verifyToken,
+  verifyPendingToken,
   getPendingTtlMinutes,
   getSessionTtlMinutes
 } from '../utils/tokens.js';
@@ -49,18 +50,25 @@ const issueSession = (res, user) => {
   setSessionCookie(res, sessionToken, getSessionTtlMinutes());
 };
 
-const resolvePendingUser = async (req) => {
+// Compared against when the email is unknown, so response timing does not reveal registered emails.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync('timing-equalizer-not-a-real-password', 10);
+
+const resolvePendingUser = async (req, allowedIntents = null) => {
   const pendingToken = req.cookies?.[getPendingTwoFactorCookieName()];
   if (!pendingToken) {
     return null;
   }
 
+  let payload;
   try {
-    const payload = verifyToken(pendingToken);
-    return await User.findByIdWithSensitive(payload.sub);
+    payload = verifyPendingToken(pendingToken);
   } catch {
     return null;
   }
+  if (allowedIntents && !allowedIntents.includes(payload.intent)) {
+    return null;
+  }
+  return User.findByIdWithSensitive(payload.sub);
 };
 
 const ensureTwoFactorSecret = async (user) => {
@@ -186,6 +194,7 @@ router.post('/login', authLimiter, loginValidation, async (req, res, next) => {
     const { email, password } = req.body;
     const user = await User.findByEmail(email);
     if (!user) {
+      await User.verifyPassword(password, DUMMY_PASSWORD_HASH);
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
@@ -303,7 +312,7 @@ router.post(
  */
 router.post('/two-factor/regenerate', authLimiter, async (req, res, next) => {
   try {
-    const pendingUser = await resolvePendingUser(req);
+    const pendingUser = await resolvePendingUser(req, ['setup']);
     if (!pendingUser || pendingUser.two_factor_enabled) {
       return res
         .status(400)

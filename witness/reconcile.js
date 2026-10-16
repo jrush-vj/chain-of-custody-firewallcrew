@@ -1,3 +1,5 @@
+import { createHmac } from 'node:crypto';
+
 export const BANK_RANDOM_CHECK_INTERVAL_MS = 30_000;
 export const BANK_CALL_WINDOW_MS = 15 * 60 * 1000;
 export const BANK_CALL_BUDGET = 60;
@@ -12,6 +14,25 @@ const getEndpoint = () => {
     throw new Error('Bank reconciliation endpoint must use HTTPS');
   }
   return endpoint;
+};
+
+// Signs the bank read with the shared witness secret so the bank can require authenticated
+// reconciliation (WITNESS_RECONCILE_AUTH=required on the bank). Message format must match
+// banking-system/backend/middleware/witnessReconcileAuth.js.
+export const signedReconcileHeaders = (url, nowMs = Date.now()) => {
+  const secret = process.env.WITNESS_HMAC_SECRET || '';
+  const nodeId = process.env.WITNESS_NODE_ID || '';
+  if (secret.length < 32 || !nodeId) return {};
+  const timestamp = String(nowMs);
+  const search = url.search.startsWith('?') ? url.search.slice(1) : url.search;
+  const signature = createHmac('sha256', secret)
+    .update(`bank-reconcile\nGET\n${url.pathname}\n${timestamp}\n${search}`)
+    .digest('hex');
+  return {
+    'x-witness-node': nodeId,
+    'x-witness-timestamp': timestamp,
+    'x-witness-signature': signature
+  };
 };
 
 const retryDelayMs = (response, nowMs) => {
@@ -136,7 +157,7 @@ export const checkBankRows = async (store, ids, fetchImpl = fetch, { recordMissi
       const url = new URL(getEndpoint());
       url.searchParams.set('transaction_ids', batchIds.join(','));
       const response = await fetchImpl(url, {
-        headers: { accept: 'application/json' },
+        headers: { accept: 'application/json', ...signedReconcileHeaders(url) },
         signal: AbortSignal.timeout(8000)
       });
       if (response.status === 429) {

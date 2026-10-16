@@ -216,16 +216,8 @@ const renderTemplate = (model) => {
                   <dd>${escapeHtml(recentAccount.iban)}</dd>
                 </div>
                 <div>
-                  <dt>Account</dt>
-                  <dd>${escapeHtml(recentAccount.account_number)}</dd>
-                </div>
-                <div>
                   <dt>Amount</dt>
                   <dd>$${escapeHtml(recentAccount.amount)}</dd>
-                </div>
-                <div>
-                  <dt>New balance</dt>
-                  <dd>$${escapeHtml(recentAccount.balance)}</dd>
                 </div>
               </dl>
             </div>`
@@ -242,7 +234,13 @@ router.get('/', (req, res) => {
 
 router.post('/', async (req, res, next) => {
   try {
-  const { senderName, senderEmail, iban, amount, reference } = req.body || {};
+  // Form fields can arrive as arrays/objects (repeated or bracketed names); accept strings only.
+  const field = (value) => (typeof value === 'string' ? value : '');
+  const senderName = field(req.body?.senderName);
+  const senderEmail = field(req.body?.senderEmail);
+  const iban = field(req.body?.iban);
+  const amount = field(req.body?.amount);
+  const reference = field(req.body?.reference);
   const errors = [];
 
   const trimmedName = senderName?.trim();
@@ -314,11 +312,11 @@ router.post('/', async (req, res, next) => {
             : 'Payment posted! Funds are now available to the account owner.',
           pending: result.pendingWitness,
           witnessEventId: result.pendingWitness ? result.witnessEventId : null,
+          // Anonymous senders only see what they submitted; the recipient's account number and
+          // balance are not disclosed.
           recentAccount: {
             iban: destinationAccount.iban,
-            account_number: destinationAccount.account_number,
-            amount: amountValue.toFixed(2),
-            balance: result.toBalance
+            amount: amountValue.toFixed(2)
           }
         })
       )
