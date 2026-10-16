@@ -26,14 +26,6 @@ sudo chmod 600 .env
 ```
 
 Set unique strong values for `DB_PASSWORD`, `JWT_SECRET`,
-<<<<<<< HEAD
-`DATA_ENCRYPTION_KEY`, and `EXTERNAL_PAYMENTS_API_KEY`. Do not use sample
-values, and do not put `.env` in Git. `DATA_ENCRYPTION_KEY` must be at least 32
-characters.
-If the repository is private, configure a read-only GitHub deploy key for the
-clone/service account before installing the polling timer.
-
-=======
 `DATA_ENCRYPTION_KEY`, `EXTERNAL_PAYMENTS_API_KEY`, and `WITNESS_HMAC_SECRET`.
 Do not use sample values, and do not put `.env` in Git.
 `DATA_ENCRYPTION_KEY` and `WITNESS_HMAC_SECRET` must each be at least 32
@@ -48,7 +40,6 @@ Oracle witness first. Do not deploy the banking witness integration until
 `https://witness.jrushvj.dev/health` succeeds from ct105 and all three
 `WITNESS_*` values are set in `.env`.
 
->>>>>>> firewallcrew-publish
 Validate and initially start the application:
 
 ```bash
@@ -82,8 +73,6 @@ fast-forward updates. Failed builds/health checks leave the commit marked
 undeployed, so a later timer run retries. Check status and logs before pushing
 another release.
 
-<<<<<<< HEAD
-=======
 ## Applying a repository release on ct105
 
 For a dashboard-only Oracle release, ct105 only needs the new root commit and
@@ -122,7 +111,6 @@ API returns HTTP 202 with `witness_status: "pending"` and retries finalization
 from the PostgreSQL outbox. Do not resubmit a transaction with a pending or
 uncertain response until you have checked transaction history.
 
->>>>>>> firewallcrew-publish
 After editing and testing locally, push to the repository's `main` branch.
 Within two minutes, ct105 fetches the commit, builds changed banking services,
 restarts the Compose stack, and verifies both local health endpoints. Follow

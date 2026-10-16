@@ -11,10 +11,7 @@ const Accounts = () => {
   const [formData, setFormData] = useState({ account_type: 'checking' });
   const [modalState, setModalState] = useState(null);
   const [modalMessage, setModalMessage] = useState('');
-<<<<<<< HEAD
-=======
   const [modalPending, setModalPending] = useState(false);
->>>>>>> firewallcrew-publish
   const [modalLoading, setModalLoading] = useState(false);
 
   const fetchAccounts = useCallback(async () => {
@@ -65,19 +62,13 @@ const Accounts = () => {
       transferAccountId: ''
     });
     setModalMessage('');
-<<<<<<< HEAD
-=======
     setModalPending(false);
->>>>>>> firewallcrew-publish
   };
 
   const closeModal = () => {
     setModalState(null);
     setModalMessage('');
-<<<<<<< HEAD
-=======
     setModalPending(false);
->>>>>>> firewallcrew-publish
     setModalLoading(false);
   };
 
@@ -90,21 +81,14 @@ const Accounts = () => {
 
     setModalLoading(true);
     setModalMessage('');
-<<<<<<< HEAD
-    try {
-      await apiClient.post('/api/transactions/transfer', {
-=======
     setModalPending(false);
     try {
       const response = await apiClient.post('/api/transactions/transfer', {
->>>>>>> firewallcrew-publish
         from_account_id: modalState.account.id,
         to_account_id: Number(modalState.transferAccountId),
         amount: parseFloat(modalState.account.balance)
       });
       await fetchAccounts();
-<<<<<<< HEAD
-=======
       if (response.data.witness_status === 'pending') {
         setModalPending(true);
         setModalMessage(
@@ -116,7 +100,6 @@ const Accounts = () => {
         );
         return;
       }
->>>>>>> firewallcrew-publish
       setModalState((prev) => ({
         ...prev,
         stage: 'confirm',
@@ -124,16 +107,12 @@ const Accounts = () => {
       }));
       setModalMessage('Balance transferred. You can now delete the account.');
     } catch (err) {
-<<<<<<< HEAD
-      setModalMessage(err.response?.data?.error || 'Unable to transfer remaining funds.');
-=======
       setModalPending(err.response?.data?.witness_status === 'pending');
       setModalMessage(
         err.response?.data?.message ||
           err.response?.data?.error ||
           'Unable to transfer remaining funds.'
       );
->>>>>>> firewallcrew-publish
     } finally {
       setModalLoading(false);
     }
@@ -143,10 +122,6 @@ const Accounts = () => {
     if (!modalState?.account) return;
     setModalLoading(true);
     setModalMessage('');
-<<<<<<< HEAD
-    try {
-      await apiClient.delete(`/api/accounts/${modalState.account.id}`);
-=======
     setModalPending(false);
     try {
       const response = await apiClient.delete(`/api/accounts/${modalState.account.id}`);
@@ -161,21 +136,16 @@ const Accounts = () => {
         );
         return;
       }
->>>>>>> firewallcrew-publish
       setAccounts((prev) => prev.filter((acc) => acc.id !== modalState.account.id));
       announceSuccess('Account deleted successfully.');
       closeModal();
     } catch (err) {
-<<<<<<< HEAD
-      setModalMessage(err.response?.data?.error || 'Failed to delete account.');
-=======
       setModalPending(err.response?.data?.witness_status === 'pending');
       setModalMessage(
         err.response?.data?.message ||
           err.response?.data?.error ||
           'Failed to delete account.'
       );
->>>>>>> firewallcrew-publish
     } finally {
       setModalLoading(false);
     }
@@ -319,15 +289,11 @@ const Accounts = () => {
                 </button>
               </div>
             )}
-<<<<<<< HEAD
-            {modalMessage && <div className="modal-message">{modalMessage}</div>}
-=======
             {modalMessage && (
               <div className={`modal-message${modalPending ? ' pending-message' : ''}`}>
                 {modalMessage}
               </div>
             )}
->>>>>>> firewallcrew-publish
           </div>
         </div>
       )}

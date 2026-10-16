@@ -1,10 +1,6 @@
 import express from 'express';
 import { Account } from '../models/Account.js';
-<<<<<<< HEAD
-import { Transaction } from '../models/Transaction.js';
-=======
 import { executeWitnessedTransaction } from '../services/witnessedTransactions.js';
->>>>>>> firewallcrew-publish
 
 const router = express.Router();
 
@@ -27,20 +23,13 @@ const buildViewModel = (overrides = {}) => ({
   },
   errors: overrides.errors || [],
   success: overrides.success || null,
-<<<<<<< HEAD
-=======
   pending: overrides.pending || false,
   witnessEventId: overrides.witnessEventId || null,
->>>>>>> firewallcrew-publish
   recentAccount: overrides.recentAccount || null
 });
 
 const renderTemplate = (model) => {
-<<<<<<< HEAD
-  const { form, errors, success, recentAccount } = model;
-=======
   const { form, errors, success, pending, witnessEventId, recentAccount } = model;
->>>>>>> firewallcrew-publish
   return `<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -142,14 +131,11 @@ const renderTemplate = (model) => {
         border: 1px solid rgba(90, 211, 162, 0.45);
         color: #d1fff2;
       }
-<<<<<<< HEAD
-=======
       .alert.pending {
         background: rgba(255, 193, 92, 0.14);
         border: 1px solid rgba(255, 193, 92, 0.4);
         color: #ffe5b5;
       }
->>>>>>> firewallcrew-publish
       .recent {
         margin-top: 1.5rem;
         padding: 1.25rem;
@@ -187,10 +173,6 @@ const renderTemplate = (model) => {
         <p class="lead">Send funds securely to any IBAN managed inside this banking system.</p>
       </header>
       ${errors.length ? `<div class="alert error">${errors.join('<br/>')}</div>` : ''}
-<<<<<<< HEAD
-      ${success ? `<div class="alert success">${escapeHtml(success)}</div>` : ''}
-      <form method="POST" novalidate>
-=======
       ${
         success
           ? `<div class="alert ${pending ? 'pending' : 'success'}">${escapeHtml(success)}${
@@ -199,7 +181,6 @@ const renderTemplate = (model) => {
           : ''
       }
       ${pending ? '' : `<form method="POST" novalidate>
->>>>>>> firewallcrew-publish
         <label>
           Sender full name
           <input name="senderName" value="${escapeHtml(form.senderName)}" required placeholder="Jane Financial" />
@@ -224,11 +205,7 @@ const renderTemplate = (model) => {
           <button type="submit">Send payment</button>
           <p style="margin:0;color:rgba(255,255,255,0.6);">Payments credit instantly upon confirmation.</p>
         </div>
-<<<<<<< HEAD
-      </form>
-=======
       </form>`}
->>>>>>> firewallcrew-publish
       ${
         recentAccount
           ? `<div class="recent">
@@ -263,12 +240,8 @@ router.get('/', (req, res) => {
   res.type('html').send(renderTemplate(buildViewModel()));
 });
 
-<<<<<<< HEAD
-router.post('/', async (req, res) => {
-=======
 router.post('/', async (req, res, next) => {
   try {
->>>>>>> firewallcrew-publish
   const { senderName, senderEmail, iban, amount, reference } = req.body || {};
   const errors = [];
 
@@ -315,33 +288,12 @@ router.post('/', async (req, res, next) => {
       );
   }
 
-<<<<<<< HEAD
-  const newBalance = parseFloat(destinationAccount.balance) + amountValue;
-  await Account.updateBalance(destinationAccount.id, newBalance);
-
-=======
->>>>>>> firewallcrew-publish
   const descriptors = [
     `External payment from ${trimmedName}`,
     trimmedEmail ? `Sender: ${trimmedEmail}` : null,
     reference?.trim() ? `Reference: ${reference.trim()}` : null
   ].filter(Boolean);
 
-<<<<<<< HEAD
-  await Transaction.create(
-    null,
-    destinationAccount.id,
-    amountValue,
-    'deposit',
-    'completed',
-    {
-      reference: descriptors.join(' | ') || 'External payment portal'
-    }
-  );
-
-  res
-    .status(200)
-=======
   const result = await executeWitnessedTransaction({
     toAccountId: destinationAccount.id,
     amount,
@@ -353,39 +305,27 @@ router.post('/', async (req, res, next) => {
 
   res
     .status(result.pendingWitness ? 202 : 200)
->>>>>>> firewallcrew-publish
     .type('html')
     .send(
       renderTemplate(
         buildViewModel({
-<<<<<<< HEAD
-          success: 'Payment posted! Funds are now available to the account owner.',
-=======
           success: result.pendingWitness
             ? 'Payment posted locally; witness confirmation is pending. Do not submit it again.'
             : 'Payment posted! Funds are now available to the account owner.',
           pending: result.pendingWitness,
           witnessEventId: result.pendingWitness ? result.witnessEventId : null,
->>>>>>> firewallcrew-publish
           recentAccount: {
             iban: destinationAccount.iban,
             account_number: destinationAccount.account_number,
             amount: amountValue.toFixed(2),
-<<<<<<< HEAD
-            balance: newBalance.toFixed(2)
-=======
             balance: result.toBalance
->>>>>>> firewallcrew-publish
           }
         })
       )
     );
-<<<<<<< HEAD
-=======
   } catch (error) {
     next(error);
   }
->>>>>>> firewallcrew-publish
 });
 
 export default router;
