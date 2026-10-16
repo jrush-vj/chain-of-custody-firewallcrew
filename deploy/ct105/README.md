@@ -126,3 +126,40 @@ sudo docker compose -f /opt/chain-of-custody/banking-system/docker-compose.yml p
 Revert the faulty source change and push the revert to `main`. The polling
 deployment then fast-forwards and redeploys that version. Do not reset the
 server checkout or edit its tracked files by hand.
+
+## Day-to-day operations with `coc.sh`
+
+`deploy/ct105/coc.sh` wraps the common `docker cp` / compose / demo commands:
+
+```bash
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh status            # containers, health, witness, layer services
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh hotpatch backend  # docker cp backend source, restart, health-check
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh hotpatch frontend # build bundle, docker cp into nginx, reload
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh rollback backend  # undo the last backend hotpatch
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh attack 2          # run the Layer 2 demo (1, 2 or 3)
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh restore           # Layers 1-3 back to normal
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh logs backend
+```
+
+A hotpatch syntax-checks the files first, saves the container's current copy
+to `/var/tmp/coc-hotpatch/`, and rolls back automatically if the health check
+fails. It does not change the image: the next automatic deploy or
+`coc.sh rebuild` replaces it with what is in Git, so commit anything you keep.
+Changes to `package.json` always need `coc.sh rebuild backend`.
+
+## Security settings (`banking-system/.env`)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WITNESS_RECONCILE_AUTH` | empty (open) | `required` rejects unsigned `/api/transactions/witness-reconcile` reads |
+| `ENABLE_API_DOCS` | `false` | Swagger UI at `/api-docs` in production |
+| `ENABLE_PAYMENT_PORTAL` | `false` | Tokenless `/send-payment` portal in production (it credits any IBAN without login) |
+
+Turn on reconciliation auth in this order so Layer 2 never goes dark:
+
+1. Deploy the witness release that signs bank reads (`bash deploy/coc-sync.sh <repo> witness` on Oracle).
+2. Set `WITNESS_RECONCILE_AUTH=required` in ct105's `banking-system/.env`.
+3. `sudo bash deploy/ct105/coc.sh rebuild backend`, then confirm the auditor's Layer 2 card stays green.
+
+Session tokens are now typed: users signed in before this release are asked to
+sign in again once.
