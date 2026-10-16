@@ -1,7 +1,8 @@
 FROM node:18-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --no-audit --no-fund
+# npm install (not ci): the committed lockfile is not fully in sync with package.json.
+RUN npm install --no-audit --no-fund
 ARG REACT_APP_API_URL
 ENV REACT_APP_API_URL=${REACT_APP_API_URL} \
     # Keep every script in a file so the nginx Content-Security-Policy can forbid inline scripts.

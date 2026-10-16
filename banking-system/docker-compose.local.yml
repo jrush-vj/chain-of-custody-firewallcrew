@@ -1,0 +1,35 @@
+# LOCAL TESTING ONLY. Adds the witness to the banking stack so every component runs on one machine:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
+#
+# The witness shares the backend's network namespace, so the backend reaches it at
+# http://127.0.0.1:8787 (the witness client only allows plain HTTP to localhost), and the witness
+# reaches the bank's reconcile endpoint at http://127.0.0.1:8080. Use deploy/local/test-stack.sh,
+# which creates a throwaway .env with matching WITNESS_* values.
+services:
+  backend:
+    ports:
+      - "127.0.0.1:8787:8787"   # witness dashboard/API (published here because the witness shares this namespace)
+
+  witness:
+    image: node:18-alpine
+    container_name: banking-witness
+    network_mode: "service:backend"
+    working_dir: /witness
+    command: ["node", "server.js"]
+    environment:
+      WITNESS_NODE_ID: ${WITNESS_NODE_ID:?Set WITNESS_NODE_ID in banking-system/.env}
+      WITNESS_HMAC_SECRET: ${WITNESS_HMAC_SECRET:?Set WITNESS_HMAC_SECRET in banking-system/.env}
+      WITNESS_DATA_PATH: /data/ledger.jsonl
+      WITNESS_BIND_HOST: 0.0.0.0
+      BANK_RECONCILE_URL: http://127.0.0.1:8080/api/transactions/witness-reconcile
+    volumes:
+      - ../witness:/witness:ro
+      - witness_data:/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  witness_data:

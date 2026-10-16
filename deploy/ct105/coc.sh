@@ -31,6 +31,10 @@ app_dir="${APP_DIR:-$repo_dir/banking-system}"
 backend_ctr="${BACKEND_CONTAINER:-banking-backend}"
 frontend_ctr="${FRONTEND_CONTAINER:-banking-frontend}"
 backup_dir="${BACKUP_DIR:-/var/tmp/coc-hotpatch}"
+# docker.exe on Windows needs native paths for anything it reads or writes on the host.
+hostpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf %s "$1"; fi; }
+mkdir -p "$backup_dir" 2>/dev/null || true
+backup_dir="$(hostpath "$backup_dir")"
 backend_health="${BACKEND_HEALTH_URL:-http://127.0.0.1:8081/health}"
 frontend_url="${FRONTEND_URL:-http://127.0.0.1:3001/}"
 witness_health="${WITNESS_HEALTH_URL:-https://witness.jrushvj.dev/health}"
@@ -151,7 +155,7 @@ hotpatch_frontend() {
   running "$frontend_ctr" || die "$frontend_ctr is not running; use: coc.sh rebuild frontend"
   local src="$app_dir/frontend" stamp tmp build_ctr api_url
   api_url="$(grep -E '^FRONTEND_PUBLIC_API_URL=' "$app_dir/.env" 2>/dev/null | cut -d= -f2- || true)"
-  tmp="$(mktemp -d)"
+  tmp="$(hostpath "$(mktemp -d)")"
   trap 'rm -rf "$tmp"; [ -n "${build_ctr:-}" ] && docker rm -f "$build_ctr" >/dev/null 2>&1 || true' RETURN
 
   say "building the React bundle (build stage of frontend/Dockerfile)"
