@@ -1,6 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import apiClient from '../../lib/apiClient';
+import { formatCurrency } from '../../lib/format';
+import { PageHeader, Spinner } from '../Common/Common';
 import './Payments.css';
+
+const EMPTY_PAYMENT = { recipient_name: '', recipient_iban: '', amount: '', reference: '' };
+
+// Group an IBAN into blocks of four for readability; the server receives it without spaces.
+const formatIban = (value) =>
+  value
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toUpperCase()
+    .slice(0, 34)
+    .replace(/(.{4})(?=.)/g, '$1 ');
 
 const Payments = () => {
   const [accounts, setAccounts] = useState([]);
@@ -10,13 +22,7 @@ const Payments = () => {
   const [success, setSuccess] = useState('');
   const [witnessPending, setWitnessPending] = useState(false);
   const [witnessEventId, setWitnessEventId] = useState('');
-  const [formData, setFormData] = useState({
-    from_account_id: '',
-    recipient_name: '',
-    recipient_iban: '',
-    amount: '',
-    reference: ''
-  });
+  const [formData, setFormData] = useState({ from_account_id: '', ...EMPTY_PAYMENT });
 
   useEffect(() => {
     const fetchAccounts = async () => {
@@ -40,9 +46,20 @@ const Payments = () => {
     fetchAccounts();
   }, []);
 
+  const sourceAccount = useMemo(
+    () => accounts.find((account) => String(account.id) === String(formData.from_account_id)),
+    [accounts, formData.from_account_id]
+  );
+  const amountValue = parseFloat(formData.amount);
+  const insufficient =
+    sourceAccount && Number.isFinite(amountValue) && amountValue > parseFloat(sourceAccount.balance || 0);
+
   const handleChange = (event) => {
     const { name, value } = event.target;
-    setFormData((prev) => ({ ...prev, [name]: value }));
+    setFormData((prev) => ({
+      ...prev,
+      [name]: name === 'recipient_iban' ? formatIban(value) : value
+    }));
   };
 
   const handleSubmit = async (event) => {
@@ -56,7 +73,8 @@ const Payments = () => {
     try {
       const response = await apiClient.post('/api/transactions/external/outgoing', {
         ...formData,
-        amount: parseFloat(formData.amount)
+        recipient_iban: formData.recipient_iban.replace(/\s+/g, ''),
+        amount: String(formData.amount).trim()
       });
       const pending = response.data.witness_status !== 'confirmed';
       setWitnessPending(pending);
@@ -67,13 +85,12 @@ const Payments = () => {
             ? 'Payment recorded; witness confirmation is pending. Do not submit again.'
             : 'Payment sent successfully.')
       );
-      setFormData((prev) => ({
-        ...prev,
-        recipient_name: '',
-        recipient_iban: '',
-        amount: '',
-        reference: ''
-      }));
+      setFormData((prev) => ({ ...prev, ...EMPTY_PAYMENT }));
+      // Reflect the new balance in the account picker.
+      apiClient
+        .get('/api/accounts')
+        .then((res) => setAccounts(res.data || []))
+        .catch(() => {});
       if (!pending) {
         setTimeout(() => setSuccess(''), 4000);
       }
@@ -86,26 +103,30 @@ const Payments = () => {
         );
         return;
       }
-      setError(err.response?.data?.error || 'Failed to send payment');
+      setError(
+        err.response?.data?.error || err.response?.data?.errors?.[0]?.msg || 'Failed to send payment'
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
   if (loading) {
-    return <div className="loading">Loading accounts...</div>;
+    return <Spinner label="Loading accounts…" />;
   }
 
   return (
-    <div className="payments-page">
-      <div className="page-header">
-        <h1>External Payments</h1>
-      </div>
-      {error && <div className="error-message">{error}</div>}
+    <div className="payments-page page-grid">
+      <PageHeader
+        eyebrow="Payments"
+        title="Send to an external IBAN"
+        subtitle="Outgoing payments are witnessed exactly like internal transfers."
+      />
+      {error && <div className="error-message" role="alert">{error}</div>}
       {success && (
-        <div className={witnessPending ? 'pending-message' : 'success-message'}>
+        <div className={witnessPending ? 'pending-message' : 'success-message'} role="status">
           {success}
-          {witnessPending && witnessEventId && <div>Witness event: {witnessEventId}</div>}
+          {witnessPending && witnessEventId && <div className="mono">Witness event: {witnessEventId}</div>}
         </div>
       )}
 
@@ -116,8 +137,8 @@ const Payments = () => {
       ) : (
         <div className="form-card">
           <form onSubmit={handleSubmit}>
-            <div className="form-group">
-              <label htmlFor="from_account_id">From Account</label>
+            <div className="form-group full">
+              <label htmlFor="from_account_id">From account</label>
               <select
                 id="from_account_id"
                 name="from_account_id"
@@ -126,20 +147,23 @@ const Payments = () => {
               >
                 {accounts.map((account) => (
                   <option key={account.id} value={account.id}>
-                    {account.account_number} — ${parseFloat(account.balance).toFixed(2)}
+                    {account.account_type.toUpperCase()} · {account.account_number} —{' '}
+                    {formatCurrency(account.balance)}
                   </option>
                 ))}
               </select>
             </div>
 
             <div className="form-group">
-              <label htmlFor="recipient_name">Recipient Name</label>
+              <label htmlFor="recipient_name">Recipient name</label>
               <input
                 type="text"
                 id="recipient_name"
                 name="recipient_name"
+                autoComplete="name"
                 value={formData.recipient_name}
                 onChange={handleChange}
+                minLength={2}
                 required
               />
             </div>
@@ -150,6 +174,10 @@ const Payments = () => {
                 type="text"
                 id="recipient_iban"
                 name="recipient_iban"
+                className="mono"
+                spellCheck={false}
+                autoCapitalize="characters"
+                placeholder="DE89 3704 0044 0532 0130 00"
                 value={formData.recipient_iban}
                 onChange={handleChange}
                 required
@@ -162,12 +190,21 @@ const Payments = () => {
                 type="number"
                 id="amount"
                 name="amount"
-                min="0"
+                inputMode="decimal"
+                min="0.01"
                 step="0.01"
+                placeholder="0.00"
                 value={formData.amount}
                 onChange={handleChange}
+                aria-invalid={insufficient || undefined}
                 required
               />
+              {sourceAccount && (
+                <small className={insufficient ? 'field-error' : 'muted'}>
+                  {insufficient ? 'Exceeds the available balance of ' : 'Available: '}
+                  {formatCurrency(sourceAccount.balance)}
+                </small>
+              )}
             </div>
 
             <div className="form-group">
@@ -176,13 +213,18 @@ const Payments = () => {
                 type="text"
                 id="reference"
                 name="reference"
+                maxLength={255}
                 value={formData.reference}
                 onChange={handleChange}
               />
             </div>
 
-            <button type="submit" className="btn-primary" disabled={submitting}>
-              {submitting ? 'Sending...' : 'Send Payment'}
+            <button type="submit" className="btn-primary full" disabled={submitting || insufficient}>
+              {submitting
+                ? 'Sending…'
+                : Number.isFinite(amountValue) && amountValue > 0
+                  ? `Send ${formatCurrency(amountValue)}`
+                  : 'Send payment'}
             </button>
           </form>
         </div>

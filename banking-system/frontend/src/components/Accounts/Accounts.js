@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import apiClient from '../../lib/apiClient';
+import { formatCurrency } from '../../lib/format';
+import { CopyButton } from '../Common/Common';
 import './Accounts.css';
 
 const Accounts = () => {
@@ -86,7 +88,7 @@ const Accounts = () => {
       const response = await apiClient.post('/api/transactions/transfer', {
         from_account_id: modalState.account.id,
         to_account_id: Number(modalState.transferAccountId),
-        amount: parseFloat(modalState.account.balance)
+        amount: String(modalState.account.balance)
       });
       await fetchAccounts();
       if (response.data.witness_status === 'pending') {
@@ -151,6 +153,19 @@ const Accounts = () => {
     }
   };
 
+  useEffect(() => {
+    if (!modalState) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !modalLoading) {
+        setModalState(null);
+        setModalMessage('');
+        setModalPending(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [modalState, modalLoading]);
+
   const availableTargets = useMemo(() => {
     if (!modalState?.account) return [];
     return accounts.filter((acc) => acc.id !== modalState.account.id);
@@ -174,7 +189,7 @@ const Accounts = () => {
         <div className="header-actions">
           <div className="stat">
             <span>Total balance</span>
-            <strong>${totalBalance.toFixed(2)}</strong>
+            <strong>{formatCurrency(totalBalance)}</strong>
           </div>
           <button className="btn-primary" onClick={() => setShowForm((prev) => !prev)}>
             {showForm ? 'Close form' : 'Create account'}
@@ -215,10 +230,15 @@ const Accounts = () => {
             <article key={account.id} className="account-card advanced">
               <header>
                 <span>{account.account_type}</span>
-                <strong>${parseFloat(account.balance).toFixed(2)}</strong>
+                <strong>{formatCurrency(account.balance)}</strong>
               </header>
-              <p className="muted">{account.account_number}</p>
-              {account.iban && <p className="muted">IBAN: {account.iban}</p>}
+              <p className="muted mono">{account.account_number}</p>
+              {account.iban && (
+                <p className="muted iban-line">
+                  <span className="mono">{account.iban}</span>
+                  <CopyButton value={account.iban} label="Copy IBAN" />
+                </p>
+              )}
               <small>Opened {new Date(account.created_at).toLocaleDateString()}</small>
               <div className="card-actions">
                 <button className="ghost-button" onClick={() => openDeleteModal(account)}>
@@ -231,16 +251,16 @@ const Accounts = () => {
       )}
 
       {modalState && (
-        <div className="modal-backdrop">
-          <div className="modal-card">
-            <h3>
+        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !modalLoading && closeModal()}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+            <h3 id="account-modal-title">
               {modalState.stage === 'transfer'
                 ? 'Move funds before deleting'
                 : 'Confirm account deletion'}
             </h3>
             <p>
               Account <strong>{modalState.account.account_number}</strong> currently holds{' '}
-              <strong>${parseFloat(modalState.account.balance).toFixed(2)}</strong>.
+              <strong>{formatCurrency(modalState.account.balance)}</strong>.
             </p>
             {modalState.stage === 'transfer' ? (
               <>
@@ -260,7 +280,7 @@ const Accounts = () => {
                       <option value="">Choose account</option>
                       {availableTargets.map((acc) => (
                         <option key={acc.id} value={acc.id}>
-                          {acc.account_number} · ${parseFloat(acc.balance).toFixed(2)}
+                          {acc.account_number} · {formatCurrency(acc.balance)}
                         </option>
                       ))}
                     </select>

@@ -22,6 +22,11 @@ export MSYS_NO_PATHCONV=1   # keep "container:/path" intact when run from Git Ba
 
 here="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="${REPO_DIR:-$(cd "$here/../.." && pwd)}"
+# On Git Bash, native tools (git.exe, docker.exe) need C:/... paths since MSYS_NO_PATHCONV is set.
+if command -v cygpath >/dev/null 2>&1; then
+  here="$(cygpath -m "$here")"
+  repo_dir="$(cygpath -m "$repo_dir")"
+fi
 app_dir="${APP_DIR:-$repo_dir/banking-system}"
 backend_ctr="${BACKEND_CONTAINER:-banking-backend}"
 frontend_ctr="${FRONTEND_CONTAINER:-banking-frontend}"
