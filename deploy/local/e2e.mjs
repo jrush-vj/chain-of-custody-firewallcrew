@@ -244,6 +244,20 @@ section('Witness (Layer 2 reconciliation)');
   check('Layer 2 check B green', green, `B=${status.checks?.B} checked=${status.bank_reconciliation?.checked_transactions} err=${status.bank_reconciliation?.last_error}`);
 
   const target = ids[ids.length - 1];
+  // When the ct105 monitor is running (test-stack.sh lab-up) the witness also keeps its own copy of each
+  // row, taken once and never overwritten. Tamper only after that copy exists, or the copy itself is
+  // taken from the tampered row.
+  const monitorOn = (await (await fetch(`${WITNESS}/status`)).json()).connection === 'connected';
+  if (monitorOn) {
+    console.log('  …monitor connected; waiting for the witness to hold a copy of every row (up to 120 s)');
+    // bank_rows on /status comes from the last heartbeat, so compare with the database itself.
+    const dbRows = Number(psql('SELECT count(*) FROM transactions'));
+    const copied = await waitFor(async () => {
+      const records = (await (await fetch(`${WITNESS}/status`)).json()).records || {};
+      return records.bank_rows >= dbRows && records.witness_copies >= dbRows;
+    }, 120_000);
+    check('witness holds row copies before the tamper test', copied);
+  }
   const original = psql(`SELECT amount FROM transactions WHERE id = ${target}`);
   psql(`UPDATE transactions SET amount = amount + 1 WHERE id = ${target}`);
   console.log(`  …tampered transaction #${target} (${original} -> +1); waiting for the witness (up to 120 s)`);

@@ -94,79 +94,69 @@ cmd_traffic() {
     'python /t/traffic_sim.py setup && python /t/traffic_sim.py run --max-count 3 --min-gap 1 --max-gap 2'
 }
 
-# The local witness lives in the backend's network namespace; any backend restart (hotpatch,
-# rollback, rebuild) leaves it on a dead namespace until it is restarted too.
+# The backend shares the witness's network namespace; restarting the witness (for example after
+# editing its ledger) leaves the backend on a dead namespace until it is restarted too.
 restart_witness() {
-  docker restart banking-witness >/dev/null
-  for _ in $(seq 1 15); do curl -fs http://127.0.0.1:8787/health >/dev/null && { echo "witness reattached"; return; }; sleep 1; done
-  echo "witness did not come back"; return 1
+  docker restart banking-witness >/dev/null && docker restart banking-backend >/dev/null
+  for _ in $(seq 1 30); do curl -fs http://127.0.0.1:8081/health >/dev/null && { echo "witness restarted, backend reattached"; return; }; sleep 2; done
+  echo "backend did not come back"; return 1
 }
 
 cmd_hotpatch() {
   say "coc.sh hotpatch (docker cp) for backend and frontend"
-  BACKUP_DIR="${TMPDIR:-/tmp}/coc-hotpatch" WITNESS_HEALTH_URL=http://127.0.0.1:8787/health \
-    bash "$repo/deploy/ct105/coc.sh" hotpatch backend
-  restart_witness
+  BACKUP_DIR="${TMPDIR:-/tmp}/coc-hotpatch" bash "$repo/deploy/ct105/coc.sh" hotpatch backend
   BACKUP_DIR="${TMPDIR:-/tmp}/coc-hotpatch" bash "$repo/deploy/ct105/coc.sh" hotpatch frontend
   WITNESS_HEALTH_URL=http://127.0.0.1:8787/health bash "$repo/deploy/ct105/coc.sh" status
 }
 
+
+# Demo timing knobs set on the host (e.g. HOLD_S=30, PAUSE_S=5) are passed through to the lab.
+in_lab() {
+  local pass=() v
+  for v in HOLD HOLD_S PAUSE_S CUT_S POLL_LIMIT_S; do [ -n "${!v:-}" ] && pass+=(-e "$v=${!v}"); done
+  docker exec "${pass[@]}" coc-lab bash /opt/chain-of-custody/deploy/local/lab/run.sh "$@"
+}
+
 cmd_lab_up() {
-  say "building and starting the lab container (ct105-ai standin)"
-  docker build -q -t coc-lab "$here/lab"
-  # Confirm coc_reader role exists.
-  cmd_layer2 > /dev/null 2>&1 || true
-  # Start the lab as a background daemon.
-  local repo_path="$repo"
-  if command -v cygpath >/dev/null 2>&1; then repo_path="$(cygpath -m "$repo")"; fi
+  [ -f "$env_file" ] || { echo "run 'test-stack.sh up' first"; exit 1; }
+  say "building the lab image (first run downloads ~1 GB; later runs are cached)"
+  docker build -t coc-lab "$here/lab"
+  say "Layer 2 read-only role"
+  cmd_layer2
+  say "starting coc-lab (hostname ct105-ai, on the stack network, repo at /opt/chain-of-custody)"
+  docker rm -f coc-lab >/dev/null 2>&1 || true
   docker run -d --name coc-lab --hostname ct105-ai \
-    --network "container:banking-backend" \
-    -v "$repo_path":/opt/chain-of-custody:ro \
+    --network banking-system_app-network \
+    -v "$repo:/opt/chain-of-custody" \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -e COMPOSE_FILE=docker-compose.yml:docker-compose.local.yml \
-    coc-lab sleep infinity >/dev/null
-  say "lab container started. Setting up wrappers and baselines..."
-  # Source monitor env, run install-wrappers, approve baselines, start monitor.
-  docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody' || true
-  docker exec coc-lab bash /opt/chain-of-custody/deploy/ct105/layer1/install-wrappers.sh > /dev/null 2>&1 || true
-  docker exec coc-lab python3 /opt/chain-of-custody/deploy/ct105/layer3/l3_config_guard.py approve > /dev/null 2>&1 || true
-  say "starting monitor.py in the lab (background)"
-  docker exec -d coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && exec python3 /opt/chain-of-custody/deploy/ct105/layer1/monitor.py run' || true
-  sleep 3
-  if docker exec coc-lab curl -s http://127.0.0.1:8787/status 2>/dev/null | jq .connection 2>/dev/null | grep -q connected; then
-    say "lab healthy and connected to witness"
+    coc-lab /opt/chain-of-custody/deploy/local/lab/start.sh >/dev/null
+  for _ in $(seq 1 30); do
+    docker logs coc-lab 2>&1 | grep -q "heartbeat\|watching " && break
+    docker inspect -f '{{.State.Running}}' coc-lab 2>/dev/null | grep -q true || break
+    sleep 2
+  done
+  docker logs coc-lab 2>&1 | tail -15
+  if curl -s http://127.0.0.1:8787/status | grep -q '"connection":"connected"'; then
+    echo "lab is up: the witness sees the monitor's heartbeats (follow with: test-stack.sh lab-logs)"
   else
-    say "lab started but connection check inconclusive (monitor may still be initializing)"
+    echo "lab started, but the witness has not seen a heartbeat yet; check: test-stack.sh lab-logs"
   fi
 }
 
 cmd_attack() {
-  local layer="${1:-}"; shift || true
-  [ -n "$layer" ] || { echo "usage: test-stack.sh attack 1|2|3 [args]"; exit 2; }
-  say "running Layer $layer attack from lab"
-  docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && exec bash /opt/chain-of-custody/deploy/ct105/coc.sh attack '"$layer"' '"$(printf '%s ' "$@")"
-  if [ "$layer" = 3 ]; then
-    restart_witness
-  fi
+  [ -n "${1:-}" ] || { echo "usage: test-stack.sh attack 1|2|3 [args]"; exit 2; }
+  say "Layer $1 attack (running inside coc-lab, as on ct105)"
+  in_lab bash deploy/ct105/coc.sh attack "$@"
 }
 
 cmd_restore() {
-  say "running restore-normal.sh from lab"
-  docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && exec bash /opt/chain-of-custody/deploy/ct105/restore-normal.sh' || true
-  if docker ps --format '{{.Names}}' | grep -q banking-backend; then
-    restart_witness
-  fi
+  say "restore-normal.sh (running inside coc-lab)"
+  in_lab bash deploy/ct105/restore-normal.sh
 }
 
-cmd_lab_shell() {
-  say "entering lab shell (type exit to leave)"
-  docker exec -it coc-lab bash -c 'cd /opt/chain-of-custody && bash'
-}
+cmd_lab_shell() { docker exec -it coc-lab bash /opt/chain-of-custody/deploy/local/lab/run.sh bash; }
 
-cmd_lab_logs() {
-  say "monitor.py background output from lab (Ctrl-C to stop)"
-  docker logs -f coc-lab 2>&1 || true
-}
+cmd_lab_logs() { docker logs -f --tail 50 coc-lab; }
 
 cmd_down() {
   say "removing the local stack and lab"

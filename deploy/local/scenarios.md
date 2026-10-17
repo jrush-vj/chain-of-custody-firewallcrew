@@ -28,11 +28,11 @@ Expect: `/mismatches` shows `changed_amount`, `/status` check B goes red. Restor
 ```bash
 docker exec banking-witness cp /data/ledger.jsonl /data/ledger.bak
 docker exec banking-witness sh -c "sed -i '0,/\"amount_minor\":[0-9]*/s//\"amount_minor\":99999/' /data/ledger.jsonl"
-docker restart banking-witness
+bash deploy/local/test-stack.sh witness-restart   # restarts the witness, then reattaches the backend
 curl -s -o /dev/null -w '%{http_code}\n' $W/health   # 503
 curl -s $W/alerts | jq '.[] | {kind, tamper_type}'   # chain_break
 ```
-Restore: `docker exec banking-witness cp /data/ledger.bak /data/ledger.jsonl && docker restart banking-witness`.
+Restore: `docker exec banking-witness cp /data/ledger.bak /data/ledger.jsonl && bash deploy/local/test-stack.sh witness-restart`.
 
 ### S3. Forged/Replayed HMAC Requests
 ```bash
@@ -58,7 +58,7 @@ curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:8081/api/transactions
 ```
 
 ### S5. Heartbeat Silence (~90 s → Layer 2 alert)
-Stop sending heartbeats for 90+ seconds (or kill monitor.py). `/status` `connection` becomes `lost`. Next heartbeat clears it.
+Stop sending heartbeats for 90+ seconds (`docker stop coc-lab`; `docker start coc-lab` resumes). `/status` `connection` becomes `lost`. Next heartbeat clears it.
 
 ---
 
@@ -136,11 +136,11 @@ bash deploy/local/test-stack.sh restore
 
 ### S12. Layer 3 Network Cut (witness-cut flag → presumed quarantine after ~45 s)
 ```bash
-docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && touch $COC_WITNESS_CUT_FLAG'
+bash deploy/local/test-stack.sh attack 3 cut   # or by hand: docker exec coc-lab touch /var/lib/coc-demo/witness-cut
 # Every witness request fails for the monitor. After ~45 s (no contact):
 curl -s $W/status | jq '.quarantine | {active, confirmed}'
 # Remove the flag:
-docker exec coc-lab bash -c 'source /opt/chain-of-custody/deploy/local/lab/monitor.env.sh /opt/chain-of-custody && rm -f $COC_WITNESS_CUT_FLAG'
+docker exec coc-lab rm -f /var/lib/coc-demo/witness-cut
 # Monitor re-establishes contact, quarantine clears.
 ```
 
@@ -162,3 +162,9 @@ bash deploy/local/test-stack.sh down
 2. **Lockout (full_lock):** requires root on Linux; falls back to dry-run quarantine on Windows/demo.
 3. **Ledger edit detection:** only checked at witness startup (not live).
 4. **Heartbeat replay nonce:** there is none, so replays within 60 s are accepted (by design).
+5. **Copy poisoning (found in local testing):** the witness's row copy (`witness/banksync.js` `receiveRows`)
+   is taken from whatever the bank row holds the first time the monitor sends it (up to ~30-60 s after the
+   commit) and is never checked against the witnessed commit. A change made in that window becomes the
+   reference: status / account / timestamp edits are then never flagged, and restoring an amount edit leaves
+   a permanent false "changed" finding. Reproduce: commit a deposit, immediately
+   `UPDATE transactions SET status='failed'`, wait 90 s, `/mismatches` shows nothing.

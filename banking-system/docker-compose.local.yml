@@ -2,19 +2,25 @@
 #
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build
 #
-# The witness shares the backend's network namespace, so the backend reaches it at
-# http://127.0.0.1:8787 (the witness client only allows plain HTTP to localhost), and the witness
-# reaches the bank's reconcile endpoint at http://127.0.0.1:8080. Use deploy/local/test-stack.sh,
-# which creates a throwaway .env with matching WITNESS_* values.
+# The backend joins the witness's network namespace, so each reaches the other on 127.0.0.1
+# (the bank's witness client only allows plain HTTP to localhost; the witness reconciles against
+# http://127.0.0.1:8080). The witness owns the namespace, so the Layer 3 demo can recreate the
+# backend without stranding the witness. Use deploy/local/test-stack.sh, which creates a throwaway
+# .env with matching WITNESS_* values.
 services:
   backend:
-    ports:
-      - "127.0.0.1:8787:8787"   # witness dashboard/API (published here because the witness shares this namespace)
+    network_mode: "service:witness"
+    ports: !reset []
+    networks: !reset []
+    depends_on:
+      postgres:
+        condition: service_healthy
+      witness:
+        condition: service_started
 
   witness:
     image: node:18-alpine
     container_name: banking-witness
-    network_mode: "service:backend"
     working_dir: /witness
     command: ["node", "server.js"]
     environment:
@@ -23,14 +29,17 @@ services:
       WITNESS_DATA_PATH: /data/ledger.jsonl
       WITNESS_BIND_HOST: 0.0.0.0
       BANK_RECONCILE_URL: http://127.0.0.1:8080/api/transactions/witness-reconcile
-      WITNESS_LAYER1_ENABLED: ${WITNESS_LAYER1_ENABLED:-1}
-      WITNESS_UNWITNESSED_GRACE_S: ${WITNESS_UNWITNESSED_GRACE_S:-20}
+      WITNESS_LAYER1_ENABLED: "1"
+      WITNESS_UNWITNESSED_GRACE_S: "20"
+    ports:
+      - "127.0.0.1:8081:8080"   # bank API (the backend listens inside this shared namespace)
+      - "127.0.0.1:8787:8787"   # witness dashboard/API
+    networks:
+      app-network:
+        aliases: [backend]      # nginx still proxies to http://backend:8080
     volumes:
       - ../witness:/witness:ro
       - witness_data:/data
-    depends_on:
-      backend:
-        condition: service_healthy
     restart: unless-stopped
 
 volumes:
