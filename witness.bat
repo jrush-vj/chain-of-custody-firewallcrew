@@ -1,8 +1,10 @@
 @echo off
-REM ASUS laptop: one script to set up AND run the witness.
-REM First run: generates a secret, creates witness\.env, installs deps, starts the witness.
-REM Every run after: reuses the existing .env and just starts the witness.
+REM ASUS laptop: one script to set up AND run the witness. Just run this every time.
+REM The HMAC secret is fixed below so it always matches setup-lenovo-server.sh -- no copying,
+REM no syncing between machines. This is a demo secret, not a production one.
 setlocal enabledelayedexpansion
+
+set "COC_HMAC_SECRET=7caf507e97c2c37e8e5e286fca914ba0ad1412deb1f2b0f36779d7ebe7d70c09"
 
 cd /d "%~dp0"
 
@@ -13,35 +15,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-if exist "witness\.env" goto :run
-
-echo.
-echo === First run: setting up witness\.env ===
-echo.
-
-REM Generate the secret via a temp .ps1 file written one line at a time (each its own
-REM standalone redirect, not a parens-grouped block) so literal ( ) in the PowerShell
-REM text below can never be misread as cmd.exe block syntax.
-set "PS1=%TEMP%\coc-gen-secret-%RANDOM%.ps1"
-set "OUT=%TEMP%\coc-secret-%RANDOM%.txt"
-> "%PS1%" echo $bytes = New-Object byte[] 32
->>"%PS1%" echo $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
->>"%PS1%" echo $rng.GetBytes($bytes)
->>"%PS1%" echo -join ($bytes ^| ForEach-Object { $_.ToString('x2') })
-
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" > "%OUT%"
-set /p HMAC_SECRET=<"%OUT%"
-del "%PS1%" "%OUT%" >nul 2>&1
-
-if "%HMAC_SECRET%"=="" (
-    echo ERROR: Failed to generate a secret. Is PowerShell available?
-    pause
-    exit /b 1
-)
-
+echo Writing witness\.env...
 (
     echo WITNESS_NODE_ID=ct105-ai
-    echo WITNESS_HMAC_SECRET=!HMAC_SECRET!
+    echo WITNESS_HMAC_SECRET=%COC_HMAC_SECRET%
     echo WITNESS_BIND_HOST=0.0.0.0
     echo WITNESS_PORT=8787
     echo WITNESS_DATA_PATH=%USERPROFILE%\.coc-witness\ledger.jsonl
@@ -50,25 +27,13 @@ if "%HMAC_SECRET%"=="" (
     echo WITNESS_LAYER1_ENABLED=1
 ) > witness\.env
 
-echo Created witness\.env
-echo.
-echo Installing npm dependencies...
-pushd witness
-call npm install --omit=dev --silent
-popd
+if not exist "witness\node_modules" (
+    echo Installing npm dependencies...
+    pushd witness
+    call npm install --omit=dev --silent
+    popd
+)
 
-echo.
-echo =====================================================================
-echo  HMAC SECRET (copy this into the Lenovo server's .env and
-echo  /etc/coc-layer1/monitor.env, replacing WITNESS_HMAC_SECRET):
-echo.
-echo    !HMAC_SECRET!
-echo.
-echo =====================================================================
-echo.
-pause
-
-:run
 REM Load witness\.env into this process's environment (node server.js reads process.env directly).
 for /f "usebackq tokens=1,* delims==" %%K in ("witness\.env") do (
     set "%%K=%%L"

@@ -19,6 +19,10 @@ log() { echo -e "${GREEN}[*]${NC} $*"; }
 warn() { echo -e "${YELLOW}[!]${NC} $*"; }
 err() { echo -e "${RED}[X]${NC} $*"; exit 1; }
 
+# Must match witness.bat's COC_HMAC_SECRET exactly -- fixed on purpose so the two scripts
+# never need manual syncing. This is a demo secret, not a production one.
+COC_HMAC_SECRET="7caf507e97c2c37e8e5e286fca914ba0ad1412deb1f2b0f36779d7ebe7d70c09"
+
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then
   err "This script must be run as root (use: sudo bash setup-lenovo-server.sh)"
@@ -52,30 +56,35 @@ fi
 
 git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
 
-# Setup banking environment
+# Setup banking environment. DB_PASSWORD etc are generated once and kept on reruns (Postgres
+# already has that password baked into its data volume -- changing it later breaks login).
+# WITNESS_HMAC_SECRET is always forced to COC_HMAC_SECRET so it can never drift from witness.bat.
 APP_DIR="$REPO_DIR/banking-system"
 if [ ! -f "$APP_DIR/.env" ]; then
-  log "Creating banking-system/.env..."
+  log "Creating banking-system/.env with fresh random secrets..."
   umask 077
-  cat > "$APP_DIR/.env" <<'EOF'
+  cat > "$APP_DIR/.env" <<EOF
 DB_NAME=bankingsystem
 DB_USER=bank
-DB_PASSWORD=changeme_db_password_12345
-JWT_SECRET=changeme_jwt_secret_1234567890
-DATA_ENCRYPTION_KEY=changeme_encryption_key_1234567890ab
+DB_PASSWORD=$(openssl rand -hex 16)
+JWT_SECRET=$(openssl rand -hex 24)
+DATA_ENCRYPTION_KEY=$(openssl rand -hex 24)
 NODE_ENV=production
-EXTERNAL_PAYMENTS_API_KEY=changeme_api_key_1234567890
+EXTERNAL_PAYMENTS_API_KEY=$(openssl rand -hex 24)
 WITNESS_NODE_ID=ct105-ai
 WITNESS_RECONCILE_AUTH=required
 WITNESS_URL=http://192.168.31.29:8787
-WITNESS_HMAC_SECRET=changeme_hmac_secret_1234567890ab
+WITNESS_HMAC_SECRET=$COC_HMAC_SECRET
 WITNESS_ALLOW_LAN_HTTP=1
 COOKIE_SECURE=false
 CORS_ORIGINS=http://192.168.31.77:3001
 FRONTEND_BIND=0.0.0.0
 EOF
   chmod 600 "$APP_DIR/.env"
-  warn "IMPORTANT: Edit $APP_DIR/.env and change all 'changeme_*' values to strong random secrets!"
+else
+  log "banking-system/.env already exists; keeping it, just checking the witness secret..."
+  grep -q "^WITNESS_HMAC_SECRET=$COC_HMAC_SECRET$" "$APP_DIR/.env" \
+    || sed -i "s/^WITNESS_HMAC_SECRET=.*/WITNESS_HMAC_SECRET=$COC_HMAC_SECRET/" "$APP_DIR/.env"
 fi
 
 # Build and start the bank
@@ -107,10 +116,10 @@ bash "$REPO_DIR/deploy/ct105/layer3/setup-demo-account.sh" >/dev/null 2>&1 || wa
 
 log "Setting up monitor environment..."
 mkdir -p /etc/coc-layer1
-cat > /etc/coc-layer1/monitor.env <<'EOF'
+cat > /etc/coc-layer1/monitor.env <<EOF
 WITNESS_URL=http://192.168.31.29:8787
 WITNESS_NODE_ID=ct105-ai
-WITNESS_HMAC_SECRET=changeme_hmac_secret_1234567890ab
+WITNESS_HMAC_SECRET=$COC_HMAC_SECRET
 WITNESS_STATUS_URL=http://192.168.31.29:8787/status
 WITNESS_MISMATCHES_URL=http://192.168.31.29:8787/mismatches
 WITNESS_HEALTH_URL=http://192.168.31.29:8787/health
