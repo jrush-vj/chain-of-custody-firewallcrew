@@ -35,3 +35,4 @@ build/
 Thumbs.db
 .claude/settings.local.json
 graphify-out/
+monitor.env
