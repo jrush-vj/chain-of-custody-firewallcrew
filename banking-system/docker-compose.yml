@@ -55,7 +55,7 @@ services:
         REACT_APP_API_URL: ${FRONTEND_PUBLIC_API_URL:-}
     container_name: banking-frontend
     ports:
-      - "127.0.0.1:3001:80"
+      - "${FRONTEND_BIND:-127.0.0.1}:3001:80"   # FRONTEND_BIND=0.0.0.0 serves the LAN
     depends_on:
       - backend
     networks:

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { WitnessStore } from '../store.js';
 import { rowHash } from '../records.js';
 import { evaluateHeartbeat } from '../banksync.js';
-import { BANK_CALL_BUDGET, checkBankRows, recheckPendingBankRows } from '../reconcile.js';
+import { BANK_CALL_BUDGET, allowsPlainHttp, checkBankRows, recheckPendingBankRows } from '../reconcile.js';
 
 const seedCommitted = (store, count) => {
   const events = [];
@@ -146,3 +146,16 @@ test('a status-only tamper never draws a green "matches the bank" while the reco
   assert.equal(store.bankPassedIds.has(1), false, 'a flagged record is not counted as verified');
   assert.equal(store.bankFindings.has(1), false, 'the four-field check still has no finding of its own');
 }));
+
+test('plain HTTP is allowed only to localhost, or to private LAN IPs when opted in', () => {
+  const lan = { WITNESS_ALLOW_LAN_HTTP: '1' };
+  const ok = (href, env) => allowsPlainHttp(new URL(href), env);
+  assert.equal(ok('http://127.0.0.1:8080/x', {}), true);
+  assert.equal(ok('http://192.168.31.77:3001/x', {}), false);
+  for (const href of ['http://192.168.31.77:3001/x', 'http://10.0.0.5/x', 'http://172.20.1.1/x']) {
+    assert.equal(ok(href, lan), true, href);
+  }
+  for (const href of ['http://8.8.8.8/x', 'http://172.32.0.1/x', 'http://bank.example/x', 'http://192.168.1.1.evil.com/x']) {
+    assert.equal(ok(href, lan), false, href);
+  }
+});

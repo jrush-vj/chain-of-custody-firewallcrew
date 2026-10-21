@@ -8,6 +8,13 @@ export class WitnessUnavailableError extends Error {
   }
 }
 
+// Plain HTTP only to localhost, or to a private-LAN IPv4 literal when WITNESS_ALLOW_LAN_HTTP=1
+// (same rule as witness/reconcile.js).
+const PRIVATE_IPV4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)\d+\.\d+(\.\d+)?$/;
+const allowsPlainHttp = (url) =>
+  ['localhost', '127.0.0.1', '::1'].includes(url.hostname) ||
+  (process.env.WITNESS_ALLOW_LAN_HTTP === '1' && PRIVATE_IPV4.test(url.hostname));
+
 export const sendWitnessRequest = async (pathname, payload) => {
   const baseUrl = process.env.WITNESS_URL?.replace(/\/+$/, '');
   const nodeId = process.env.WITNESS_NODE_ID;
@@ -22,7 +29,7 @@ export const sendWitnessRequest = async (pathname, payload) => {
   } catch (error) {
     throw new WitnessUnavailableError('Transaction witness URL is invalid', { cause: error });
   }
-  if (url.protocol !== 'https:' && !['localhost', '127.0.0.1', '::1'].includes(url.hostname)) {
+  if (url.protocol !== 'https:' && !allowsPlainHttp(url)) {
     throw new WitnessUnavailableError('Transaction witness must use HTTPS');
   }
 

@@ -5,7 +5,7 @@ REPO_DIR="/opt/chain-of-custody"
 APP_DIR="${REPO_DIR}/banking-system"
 STATE_DIR="/var/lib/banking-deploy"
 STATE_FILE="${STATE_DIR}/last-successful-commit"
-BRANCH="main"
+BRANCH="${DEPLOY_BRANCH:-main}"   # set in /etc/default/banking-deploy
 
 log() {
   printf '%s %s\n' "$(date --utc +'%Y-%m-%dT%H:%M:%SZ')" "$*"
@@ -47,30 +47,48 @@ if [[ "$last_success" == "$target_commit" ]]; then
   exit 0
 fi
 
-if [[ -n "$last_success" ]] && git -C "$REPO_DIR" cat-file -e "${last_success}^{commit}" 2>/dev/null; then
+mark_deployed() {
+  install -d -m 0750 "$STATE_DIR"
+  printf '%s\n' "$target_commit" > "${STATE_FILE}.tmp"
+  mv "${STATE_FILE}.tmp" "$STATE_FILE"
+}
+
+# changed <path>: true when <path> differs since the last deployed commit (always true on first deploy).
+changed() {
+  [[ -z "$last_success" ]] && return 0
+  ! git -C "$REPO_DIR" diff --quiet "$last_success" "$target_commit" -- "$1"
+}
+
+# An unknown last commit is treated like a first deploy: rebuild and restart everything.
+if [[ -n "$last_success" ]] && ! git -C "$REPO_DIR" cat-file -e "${last_success}^{commit}" 2>/dev/null; then
+  last_success=""
+fi
+if [[ -n "$last_success" ]]; then
   git -C "$REPO_DIR" merge-base --is-ancestor "$last_success" "$target_commit" \
     || fail "Deployment history changed; manual review is required"
-  if git -C "$REPO_DIR" diff --quiet "$last_success" "$target_commit" -- banking-system; then
-    install -d -m 0750 "$STATE_DIR"
-    printf '%s\n' "$target_commit" > "${STATE_FILE}.tmp"
-    mv "${STATE_FILE}.tmp" "$STATE_FILE"
-    log "No banking-system changes in ${target_commit}; app was not rebuilt"
-    exit 0
-  fi
 fi
 
-docker compose --project-directory "$APP_DIR" -f "${APP_DIR}/docker-compose.yml" config --quiet
-docker compose --project-directory "$APP_DIR" -f "${APP_DIR}/docker-compose.yml" \
-  up -d --build --remove-orphans postgres backend frontend
+if changed banking-system; then
+  docker compose --project-directory "$APP_DIR" -f "${APP_DIR}/docker-compose.yml" config --quiet
+  docker compose --project-directory "$APP_DIR" -f "${APP_DIR}/docker-compose.yml" \
+    up -d --build --remove-orphans postgres backend frontend
 
-curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 \
-  http://127.0.0.1:8081/health >/dev/null \
-  || fail "Backend health check failed"
-curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 \
-  http://127.0.0.1:3001/ >/dev/null \
-  || fail "Frontend health check failed"
+  curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 \
+    http://127.0.0.1:8081/health >/dev/null \
+    || fail "Backend health check failed"
+  curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 \
+    http://127.0.0.1:3001/ >/dev/null \
+    || fail "Frontend health check failed"
+  log "Rebuilt banking stack for ${target_commit}"
+else
+  log "No banking-system changes in ${target_commit}; app was not rebuilt"
+fi
 
-install -d -m 0750 "$STATE_DIR"
-printf '%s\n' "$target_commit" > "${STATE_FILE}.tmp"
-mv "${STATE_FILE}.tmp" "$STATE_FILE"
-log "Deployed banking-system commit ${target_commit}"
+# The Layer 1/2/3 monitor runs straight from this checkout, so a restart picks up agent changes.
+if changed deploy/ct105 && [[ -f /etc/systemd/system/coc-layer1-monitor.service ]]; then
+  systemctl restart coc-layer1-monitor.service || fail "coc-layer1-monitor failed to restart"
+  log "Restarted coc-layer1-monitor for ${target_commit}"
+fi
+
+mark_deployed
+log "Deployed commit ${target_commit}"

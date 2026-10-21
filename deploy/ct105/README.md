@@ -1,4 +1,27 @@
-# Automatic deployment on ct105-ai
+# Current setup: Ubuntu bank server + laptop witness (LAN)
+
+The bank and the Layer 1/2/3 monitor run on the Ubuntu server (192.168.31.77). The witness runs on the
+Windows laptop. Everything travels over plain HTTP on the LAN (`WITNESS_ALLOW_LAN_HTTP=1`, private IPs only).
+The ct105/Oracle/Cloudflare sections below are kept for history.
+
+One-time, from the laptop's Git Bash (the server must be able to clone `main`, so push first):
+
+```bash
+bash deploy/server/setup.sh <ssh-user>@192.168.31.77 <laptop-lan-ip>
+```
+
+Then run the three PowerShell lines it prints (firewall rule, start-at-logon task). Bank:
+`http://192.168.31.77:3001`, witness dashboard: `http://localhost:8787`.
+
+- Witness changes: save the file; `witness/run-witness.ps1` restarts it (`node --watch`).
+- Bank or agent changes: push to `main`. Within 2 minutes the server rebuilds on `banking-system/`
+  changes and restarts `coc-layer1-monitor` on `deploy/ct105/` changes.
+- Status/demo: `ssh -t <user>@192.168.31.77 sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh status`
+  (also `attack 1|2|3`, `restore`, `logs`).
+- Laptop IP changed? Re-run `setup.sh` with the new IP. Keep the laptop awake: with the witness down,
+  transactions are refused.
+
+# (Old) Automatic deployment on ct105-ai
 
 This repository is the source of truth. A systemd timer on ct105-ai fetches
 `main` every two minutes and rebuilds the banking stack only when files under

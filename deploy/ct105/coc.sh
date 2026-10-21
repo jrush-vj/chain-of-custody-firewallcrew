@@ -19,6 +19,8 @@
 # BACKEND_HEALTH_URL, FRONTEND_URL, WITNESS_HEALTH_URL.
 set -Eeuo pipefail
 export MSYS_NO_PATHCONV=1   # keep "container:/path" intact when run from Git Bash on Windows
+# The bank server's monitor env carries the witness URLs; the attack scripts launched below inherit them.
+if [ -r /etc/coc-layer1/monitor.env ]; then set -a; . /etc/coc-layer1/monitor.env; set +a; fi
 
 here="$(cd "$(dirname "$0")" && pwd)"
 repo_dir="${REPO_DIR:-$(cd "$here/../.." && pwd)}"

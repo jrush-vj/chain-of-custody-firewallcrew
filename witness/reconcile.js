@@ -5,12 +5,18 @@ export const BANK_CALL_WINDOW_MS = 15 * 60 * 1000;
 export const BANK_CALL_BUDGET = 60;
 const batchSize = 100;
 
+// Plain HTTP only to localhost, or to a private-LAN IPv4 literal when WITNESS_ALLOW_LAN_HTTP=1.
+const PRIVATE_IPV4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)\d+\.\d+(\.\d+)?$/;
+export const allowsPlainHttp = (url, env = process.env) =>
+  ['localhost', '127.0.0.1', '::1'].includes(url.hostname) ||
+  (env.WITNESS_ALLOW_LAN_HTTP === '1' && PRIVATE_IPV4.test(url.hostname));
+
 const getEndpoint = () => {
   const value =
     process.env.BANK_RECONCILE_URL ||
     'https://bank.jrushvj.dev/api/transactions/witness-reconcile';
   const endpoint = new URL(value);
-  if (endpoint.protocol !== 'https:' && !['localhost', '127.0.0.1', '::1'].includes(endpoint.hostname)) {
+  if (endpoint.protocol !== 'https:' && !allowsPlainHttp(endpoint)) {
     throw new Error('Bank reconciliation endpoint must use HTTPS');
   }
   return endpoint;
