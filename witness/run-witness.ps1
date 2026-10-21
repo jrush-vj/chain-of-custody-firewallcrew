@@ -9,6 +9,6 @@ New-Item -ItemType Directory -Force (Split-Path $log) | Out-Null
 # The ledger lives outside witness/, so ledger writes don't trigger a restart.
 # shortcut: after a crash node --watch waits for the next file save; the loop only covers a clean exit.
 while ($true) {
-  node --watch --watch-path=. server.js *>> $log
+  node --watch --watch-path=. server.js *>&1 | Out-File -FilePath $log -Append -Encoding utf8
   Start-Sleep -Seconds 3
 }
