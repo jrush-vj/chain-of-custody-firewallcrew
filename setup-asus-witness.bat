@@ -1,85 +1,60 @@
 @echo off
-REM Setup script for ASUS laptop (witness + defense demo UI)
-REM This installs Node.js dependencies and starts the witness dashboard
+REM One-stop setup for ASUS laptop (witness)
+REM Run this once, then use run-witness.bat to start the witness
 
 setlocal enabledelayedexpansion
 
 echo.
-echo === ASUS Laptop: Witness + Defense Demo UI ===
+echo === ASUS Laptop: Witness Setup ===
 echo.
 
-REM Check if Node.js is installed
 where node >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Node.js is not installed. Please install Node.js 18+ from https://nodejs.org/
+    echo ERROR: Node.js not installed. Install from https://nodejs.org/
     pause
     exit /b 1
 )
-
-REM Check if Git is installed
-where git >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Git is not installed. Please install Git Bash.
-    pause
-    exit /b 1
-)
-
-echo Detected Node.js:
-node --version
 
 cd /d "%~dp0"
+
+REM Generate random HMAC secret using PowerShell
+for /f "delims=" %%A in ('powershell -NoProfile -Command "Write-Host -NoNewline ([Convert]::ToHexString([byte[]](Get-Random -SetSeed (Get-Random -Minimum 1 -Maximum 999999) -Count 32 | ForEach-Object {$_})))"') do set HMAC_SECRET=%%A
+
+REM Fallback if PowerShell method fails
+if "!HMAC_SECRET!"=="" (
+    set HMAC_SECRET=abcdef1234567890abcdef1234567890
+)
+
+echo Creating witness\.env...
+(
+    echo WITNESS_NODE_ID=ct105-ai
+    echo WITNESS_HMAC_SECRET=!HMAC_SECRET!
+    echo WITNESS_BIND_HOST=0.0.0.0
+    echo WITNESS_PORT=8787
+    echo WITNESS_DATA_PATH=%USERPROFILE%\.coc-witness\ledger.jsonl
+    echo BANK_RECONCILE_URL=http://192.168.31.77:3001/api/transactions/witness-reconcile
+    echo WITNESS_ALLOW_LAN_HTTP=1
+    echo WITNESS_LAYER1_ENABLED=1
+) > witness\.env
+
 if errorlevel 1 (
-    echo ERROR: Failed to change to repo directory
+    echo ERROR: Failed to create witness\.env
     pause
     exit /b 1
 )
 
-echo Current directory: !cd!
-
-REM Check if witness .env exists
-if not exist "witness\.env" (
-    echo.
-    echo Creating witness\.env...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$secret = [System.Convert]::ToHexString([byte[]](0..31 ^| ForEach-Object {Get-Random -Minimum 0 -Maximum 256})); " ^
-        "@('WITNESS_NODE_ID=ct105-ai', " ^
-        "'WITNESS_HMAC_SECRET=' + $secret, " ^
-        "'WITNESS_BIND_HOST=0.0.0.0', " ^
-        "'WITNESS_PORT=8787', " ^
-        "'WITNESS_DATA_PATH=' + [System.IO.Path]::Combine([System.Environment]::GetFolderPath('Personal'), '.coc-witness', 'ledger.jsonl'), " ^
-        "'BANK_RECONCILE_URL=http://192.168.31.77:3001/api/transactions/witness-reconcile', " ^
-        "'WITNESS_ALLOW_LAN_HTTP=1', " ^
-        "'WITNESS_LAYER1_ENABLED=1') ^| Out-File -FilePath witness\.env -Encoding UTF8"
-
-    if errorlevel 1 (
-        echo ERROR: Failed to create witness\.env
-        pause
-        exit /b 1
-    )
-    echo Created witness\.env
-)
-
-REM Install npm dependencies for witness
-echo.
-echo Installing witness dependencies...
+echo Installing npm dependencies...
 cd witness
-call npm install --omit=dev
-if errorlevel 1 (
-    echo ERROR: npm install failed
-    pause
-    exit /b 1
-)
+call npm install --omit=dev --silent
 cd ..
 
 echo.
 echo === Setup Complete ===
 echo.
-echo Next steps:
-echo 1. Keep this laptop on the LAN (192.168.31.29)
-echo 2. Run: powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-ScheduledTask -TaskName 'CoC witness'"
-echo 3. Open witness dashboard: http://localhost:8787
-echo 4. Bank site: http://192.168.31.77:3001
+echo HMAC Secret (save this): !HMAC_SECRET!
 echo.
-echo To start the witness manually, run: run-witness.bat
+echo Next: Run setup-lenovo-server.sh on the Lenovo with this secret.
+echo Then: run-witness.bat to start the witness.
+echo Dashboard: http://localhost:8787
 echo.
 pause
