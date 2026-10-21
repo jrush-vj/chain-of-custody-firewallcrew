@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chain of Custody - Hacker Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Monaco', 'Courier New', monospace;
+      background: #0a0e27;
+      color: #00ff41;
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .container { display: flex; width: 100%; height: 100%; }
+    .panel { flex: 1; border-right: 2px solid #00ff41; padding: 20px; overflow-y: auto; }
+    .panel.right { border-right: none; }
+    h1 { font-size: 1.5em; margin-bottom: 20px; text-shadow: 0 0 10px #00ff41; }
+    .attack-button {
+      width: 100%;
+      padding: 15px;
+      margin: 10px 0;
+      background: #1a1f3a;
+      border: 2px solid #00ff41;
+      color: #00ff41;
+      font-family: monospace;
+      font-size: 1em;
+      cursor: pointer;
+      border-radius: 4px;
+      transition: all 0.3s;
+    }
+    .attack-button:hover {
+      background: #00ff41;
+      color: #0a0e27;
+      box-shadow: 0 0 20px #00ff41;
+    }
+    .attack-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .attack-button.running { background: #ff6600; color: #0a0e27; }
+    .status { margin-top: 20px; padding: 10px; background: #1a1f3a; border-left: 4px solid #00ff41; }
+    .chat-log {
+      background: #000;
+      border: 1px solid #00ff41;
+      height: 80%;
+      overflow-y: auto;
+      padding: 15px;
+      margin-bottom: 15px;
+      font-size: 0.9em;
+      line-height: 1.6;
+    }
+    .chat-message {
+      margin: 8px 0;
+      padding: 8px;
+      border-left: 3px solid #00ff41;
+      padding-left: 10px;
+    }
+    .chat-message.error { border-left-color: #ff4444; color: #ff8888; }
+    .chat-message.success { border-left-color: #00ff41; color: #00ff41; }
+    .chat-message.info { border-left-color: #ffff00; color: #ffff00; }
+    .chat-message.alert { border-left-color: #ff6600; color: #ff6600; animation: blink 1s infinite; }
+    @keyframes blink { 0%, 49%, 100% { opacity: 1; } 50%, 99% { opacity: 0.5; } }
+    .input-box {
+      display: flex;
+      gap: 10px;
+    }
+    input {
+      flex: 1;
+      padding: 10px;
+      background: #1a1f3a;
+      border: 1px solid #00ff41;
+      color: #00ff41;
+      font-family: monospace;
+      border-radius: 4px;
+    }
+    button { padding: 10px 20px; background: #00ff41; color: #0a0e27; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; }
+    button:hover { box-shadow: 0 0 15px #00ff41; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="panel left">
+      <h1>⚔️ Attack Layers</h1>
+      <button class="attack-button" onclick="launchAttack(1)">Layer 1: Honeypot Bypass</button>
+      <button class="attack-button" onclick="launchAttack(2)">Layer 2: Database Tamper</button>
+      <button class="attack-button" onclick="launchAttack(3)">Layer 3: Network Cut & Lockout</button>
+      <div class="status">
+        <p>Server: <span id="server-status">checking...</span></p>
+        <p>Witness: <span id="witness-status">checking...</span></p>
+        <p>SSH: <span id="ssh-status">checking...</span></p>
+      </div>
+    </div>
+
+    <div class="panel right">
+      <h1>🔍 Attack Log</h1>
+      <div class="chat-log" id="chatLog"></div>
+      <div class="input-box">
+        <input type="text" id="sshInput" placeholder="SSH: user@192.168.31.77 (optional custom command)" />
+        <button onclick="customAttack()">Run</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const chatLog = document.getElementById('chatLog');
+    const sshInput = document.getElementById('sshInput');
+    const apiBase = 'http://127.0.0.1:3000';
+
+    function addChat(msg, type = 'info') {
+      const div = document.createElement('div');
+      div.className = `chat-message ${type}`;
+      div.textContent = msg;
+      chatLog.appendChild(div);
+      chatLog.scrollTop = chatLog.scrollHeight;
+    }
+
+    async function checkStatus() {
+      try {
+        const res = await fetch(`${apiBase}/status`);
+        const data = await res.json();
+        document.getElementById('server-status').textContent = data.server ? '✓ Ready' : '✗ Down';
+        document.getElementById('witness-status').textContent = data.witness ? '✓ Connected' : '✗ Disconnected';
+        document.getElementById('ssh-status').textContent = data.ssh ? '✓ Open' : '✗ Closed';
+      } catch (e) {
+        document.getElementById('server-status').textContent = '✗ API Error';
+      }
+    }
+
+    async function launchAttack(layer) {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.classList.add('running');
+      addChat(`[*] Launching Layer ${layer} attack...`, 'info');
+
+      try {
+        const res = await fetch(`${apiBase}/attack`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ layer })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          addChat(`[✓] Layer ${layer} attack executed`, 'success');
+          data.output?.split('\n').forEach(line => {
+            if (line.trim()) addChat(`  → ${line}`, 'info');
+          });
+          addChat(`[!] Check witness dashboard for detections`, 'alert');
+        } else {
+          addChat(`[✗] Attack failed: ${data.error}`, 'error');
+        }
+      } catch (e) {
+        addChat(`[✗] Error: ${e.message}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('running');
+      }
+
+      // Re-check status after attack
+      setTimeout(checkStatus, 2000);
+    }
+
+    async function customAttack() {
+      const cmd = sshInput.value.trim();
+      if (!cmd) return addChat('[✗] No command entered', 'error');
+
+      addChat(`[*] Running: ${cmd}`, 'info');
+      sshInput.value = '';
+
+      try {
+        const res = await fetch(`${apiBase}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cmd })
+        });
+        const data = await res.json();
+
+        if (data.success) {
+          data.output?.split('\n').forEach(line => {
+            if (line.trim()) addChat(`  ${line}`, 'info');
+          });
+        } else {
+          addChat(`[✗] ${data.error}`, 'error');
+        }
+      } catch (e) {
+        addChat(`[✗] Error: ${e.message}`, 'error');
+      }
+
+      setTimeout(checkStatus, 1000);
+    }
+
+    // Check status every 5 seconds
+    checkStatus();
+    setInterval(checkStatus, 5000);
+
+    // Log initial message
+    addChat('🔓 Hacker demo loaded. Choose an attack or run custom SSH commands.', 'success');
+  </script>
+</body>
+</html>
