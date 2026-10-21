@@ -73,10 +73,10 @@ if changed banking-system; then
   docker compose --project-directory "$APP_DIR" -f "${APP_DIR}/docker-compose.yml" \
     up -d --build --remove-orphans postgres backend frontend
 
-  curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 \
+  curl --fail --silent --show-error --retry 60 --retry-all-errors --retry-delay 2 \
     http://127.0.0.1:8081/health >/dev/null \
-    || fail "Backend health check failed"
-  curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 \
+    || { docker logs --tail 40 banking-backend 2>&1 || true; fail "Backend health check failed"; }
+  curl --fail --silent --show-error --retry 60 --retry-all-errors --retry-delay 2 \
     http://127.0.0.1:3001/ >/dev/null \
     || fail "Frontend health check failed"
   log "Rebuilt banking stack for ${target_commit}"

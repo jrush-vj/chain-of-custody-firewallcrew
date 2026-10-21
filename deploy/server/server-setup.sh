@@ -28,6 +28,7 @@ say "repository at $repo"
 if [ "$(git -C "$repo" branch --show-current)" != "$BRANCH" ]; then
   git -C "$repo" fetch -q origin "$BRANCH" && git -C "$repo" checkout -q -B "$BRANCH" "origin/$BRANCH"
 fi
+git -C "$repo" pull -q --ff-only origin "$BRANCH"   # so this run already uses the latest deploy scripts
 # The auto-deploy timer follows this branch.
 echo "DEPLOY_BRANCH=$BRANCH" > /etc/default/banking-deploy
 export DEPLOY_BRANCH="$BRANCH"
