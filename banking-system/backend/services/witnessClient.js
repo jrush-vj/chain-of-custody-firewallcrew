@@ -8,9 +8,9 @@ export class WitnessUnavailableError extends Error {
   }
 }
 
-// Plain HTTP only to localhost, or to a private-LAN IPv4 literal when WITNESS_ALLOW_LAN_HTTP=1
-// (same rule as witness/reconcile.js).
-const PRIVATE_IPV4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)\d+\.\d+(\.\d+)?$/;
+// Plain HTTP only to localhost, or to a private-LAN / Tailscale (100.64.0.0/10) IPv4 literal
+// when WITNESS_ALLOW_LAN_HTTP=1 (same rule as witness/reconcile.js).
+const PRIVATE_IPV4 = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|7\d|[89]\d|1[01]\d|12[0-7])\.)\d+\.\d+(\.\d+)?$/;
 const allowsPlainHttp = (url) =>
   ['localhost', '127.0.0.1', '::1'].includes(url.hostname) ||
   (process.env.WITNESS_ALLOW_LAN_HTTP === '1' && PRIVATE_IPV4.test(url.hostname));

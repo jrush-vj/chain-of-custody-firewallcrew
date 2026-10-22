@@ -22,7 +22,7 @@ echo Writing witness\.env...
     echo WITNESS_BIND_HOST=0.0.0.0
     echo WITNESS_PORT=8787
     echo WITNESS_DATA_PATH=%USERPROFILE%\.coc-witness\ledger.jsonl
-    echo BANK_RECONCILE_URL=http://192.168.31.77:3001/api/transactions/witness-reconcile
+    echo BANK_RECONCILE_URL=http://100.73.143.33:3001/api/transactions/witness-reconcile
     echo WITNESS_ALLOW_LAN_HTTP=1
     echo WITNESS_LAYER1_ENABLED=1
 ) > witness\.env

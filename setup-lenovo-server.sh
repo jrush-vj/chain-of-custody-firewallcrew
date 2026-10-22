@@ -73,11 +73,11 @@ NODE_ENV=production
 EXTERNAL_PAYMENTS_API_KEY=$(openssl rand -hex 24)
 WITNESS_NODE_ID=ct105-ai
 WITNESS_RECONCILE_AUTH=required
-WITNESS_URL=http://192.168.31.29:8787
+WITNESS_URL=http://100.76.136.23:8787
 WITNESS_HMAC_SECRET=$COC_HMAC_SECRET
 WITNESS_ALLOW_LAN_HTTP=1
 COOKIE_SECURE=false
-CORS_ORIGINS=http://192.168.31.77:3001
+CORS_ORIGINS=http://192.168.31.77:3001,http://100.73.143.33:3001
 FRONTEND_BIND=0.0.0.0
 EOF
   chmod 600 "$APP_DIR/.env"
@@ -117,12 +117,12 @@ bash "$REPO_DIR/deploy/ct105/layer3/setup-demo-account.sh" >/dev/null 2>&1 || wa
 log "Setting up monitor environment..."
 mkdir -p /etc/coc-layer1
 cat > /etc/coc-layer1/monitor.env <<EOF
-WITNESS_URL=http://192.168.31.29:8787
+WITNESS_URL=http://100.76.136.23:8787
 WITNESS_NODE_ID=ct105-ai
 WITNESS_HMAC_SECRET=$COC_HMAC_SECRET
-WITNESS_STATUS_URL=http://192.168.31.29:8787/status
-WITNESS_MISMATCHES_URL=http://192.168.31.29:8787/mismatches
-WITNESS_HEALTH_URL=http://192.168.31.29:8787/health
+WITNESS_STATUS_URL=http://100.76.136.23:8787/status
+WITNESS_MISMATCHES_URL=http://100.76.136.23:8787/mismatches
+WITNESS_HEALTH_URL=http://100.76.136.23:8787/health
 PYTHONUNBUFFERED=1
 EOF
 chmod 600 /etc/coc-layer1/monitor.env
