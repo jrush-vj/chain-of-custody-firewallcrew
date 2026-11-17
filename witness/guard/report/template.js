@@ -36,7 +36,7 @@ export const buildReport = ({ incident, records, config, now = new Date(), narra
     .filter((record) => record.action === 'layer_event' && record.payload.trigger?.startsWith('guard:')
       && record.payload.trigger !== 'guard:report' && record.payload.detail?.incident === incident.id)
     .map((record) => ({
-      ...cite(record), from: safeName(String(record.payload.detail.from).toLowerCase()),
+      ...cite(record), from: record.payload.detail.from ? safeName(String(record.payload.detail.from).toLowerCase()) : 'start',
       to: safeName(String(record.payload.detail.to).toLowerCase()), approver: safeName(record.payload.detail.approver || 'none')
     }));
 

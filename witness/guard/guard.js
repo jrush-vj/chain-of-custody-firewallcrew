@@ -108,10 +108,13 @@ export const createGuard = (store, config = loadGuardConfig(), { bob: bobOverrid
     return result.ok ? { status: 200, report } : { status: 409, problems: result.problems };
   };
 
+  // An open alert the WITNESS raised itself. Events the box posted are the box's word, not evidence.
+  const openWitnessEvent = (kind) => store.recentLayerEvents().some((item) => item.kind === kind && item.state === 'alert' && !item.resolved && item.origin !== 'box');
+
   const bankCount = () => (store.bankView ? store.bankView.count : 0);
 
   const buildEvidence = (nowMs) => {
-    const silence = store.hasOpenLayerEvent('silence');
+    const silence = openWitnessEvent('silence');
     if (silence && !tracker.silent) {
       tracker.silent = true;
       tracker.outages.push(nowMs / 1000);
@@ -122,7 +125,7 @@ export const createGuard = (store, config = loadGuardConfig(), { bob: bobOverrid
       tracker.silent = false;
       tracker.reconnectAt = nowMs;
     }
-    const mismatches = store.recentLayerEvents().filter((item) => item.state === 'alert' && !item.resolved && TAMPER_KIND[item.kind])
+    const mismatches = store.recentLayerEvents().filter((item) => item.state === 'alert' && !item.resolved && item.origin !== 'box' && TAMPER_KIND[item.kind])
       .map((item) => ({ kind: TAMPER_KIND[item.kind], seq: Number.isInteger(item.id) ? item.id : null }));
     const chainOk = !store.integrityError;
     // After the link returns, wait for the witness's own bank comparison to run again before trusting it.
@@ -144,7 +147,7 @@ export const createGuard = (store, config = loadGuardConfig(), { bob: bobOverrid
       reconnect: tracker.reconnect,
       chain: { ok: chainOk },
       mismatches,
-      challenge: { failed: store.hasOpenLayerEvent('bad_challenge_signature') },
+      challenge: { failed: openWitnessEvent('bad_challenge_signature') },
       outages: tracker.outages,
       heartbeats: { validRecent: Boolean(store.lastHeartbeatAt) && nowMs - store.lastHeartbeatAt < promised * 2000 }
     };

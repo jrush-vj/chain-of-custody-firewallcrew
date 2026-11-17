@@ -5,7 +5,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "guard-demo": "node guard/demo.js"
+    "guard-demo": "node guard/demo.js",
+    "guard-walkthrough": "node guard/walkthrough.mjs"
   },
   "engines": {
     "node": ">=18"

@@ -270,3 +270,25 @@ test('a guard: event never masks a confirmed quarantine from the box', async () 
     assert.equal(status.quarantine.id, 'q-1');
   } finally { await stop(); }
 });
+
+test('a root attacker cannot force a quarantine by posting fake evidence as the box', async () => {
+  const { guard, base, store, stop } = await start();
+  try {
+    const post = (event) => {
+      const body = JSON.stringify(event);
+      return fetch(`${base}/v1/layer-events`, { method: 'POST', headers: { 'content-type': 'application/json', ...sign('POST', '/v1/layer-events', body) }, body });
+    };
+    // The box (anyone with the shared secret) posts a forged tamper finding, and a forged silence.
+    assert.equal((await post({ layer: 2, trigger: 'record_mismatch', kind: 'record_mismatch', state: 'alert', summary: 'forged', detail: { record: 1 }, who: {} })).status, 200);
+    assert.equal((await post({ layer: 2, trigger: 'heartbeat_silence', kind: 'silence', state: 'alert', summary: 'forged', detail: {}, who: {} })).status, 200);
+    guard.tick(Date.now());
+    guard.tick(Date.now() + 10_000_000);
+    assert.deepEqual((await (await fetch(`${base}/guard/state`)).json()).incidents, [], 'no incident from the host alone');
+    assert.equal(guard.pendingDecision(), null, 'and no quarantine order');
+    assert.ok(store.recentLayerEvents().every((item) => item.origin === 'box'), 'the ledger records who vouched for each event');
+    // The same finding raised by the witness itself still counts.
+    await store.recordLayerEvent({ layer: 2, trigger: 'record_mismatch', kind: 'record_mismatch', state: 'alert', summary: 'real', detail: { record: 1 }, who: {} });
+    guard.tick(Date.now());
+    assert.equal(guard.machine.active().class, 'TAMPER_CONFIRMED');
+  } finally { await stop(); }
+});

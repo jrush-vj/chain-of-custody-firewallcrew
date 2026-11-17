@@ -93,3 +93,11 @@ Bob only ever writes a labelled note for a human. It cannot approve, seal, quara
 What this does not give you: the network. Run the witness host with an egress allowlist so Bob's process can
 reach only IBM's API; this code cannot enforce that for you. Live behaviour against the real Bob service
 (that the tool-group flags really remove every tool) is verified only with a key; see the checkpoint notes.
+
+## See it work (no key, no Docker)
+
+From `witness/`:
+
+- `npm run guard-walkthrough` starts the real witness server and drives it over HTTP: forged box evidence is ignored, silence seals, a verified reconnect resumes, tampering waits for an approver, the report is verified by the independent CLI, and Bob is refused. Time is fast-forwarded; the witness's own bank comparison is simulated.
+- `npm run guard-demo` replays 41 expected-vs-actual checks (classifier, containment timers, injection, a scripted hijacked Bob).
+- `npm test` runs all 129 tests.

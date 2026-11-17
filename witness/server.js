@@ -778,7 +778,10 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
           ...(payload.layer === 2 && { kind: payload.kind }),
           summary: payload.summary,
           detail: payload.detail ?? {},
-          who: payload.who ?? {}
+          who: payload.who ?? {},
+          // Posted by the monitored host, so only the host vouches for it. The guard never treats it as
+          // witness-established evidence (a root attacker holds the shared secret and could forge it).
+          origin: 'box'
         });
         return sendJson(response, 200, { status: 'recorded', seq: record.seq });
       }
