@@ -1,6 +1,6 @@
 # Status
 
-Updated 2026-11-13 (branch `local-test`, uncommitted).
+Updated 2026-11-17.
 
 ## Done
 - Hacker demo restored (`deploy/hacker-demo`, http://localhost:3300): Layer 1/2/3 attack buttons run inside
@@ -27,3 +27,39 @@ Updated 2026-11-13 (branch `local-test`, uncommitted).
 - The diagnosis lives in witness memory only: a witness restart clears it (press the button again).
 - A full diagnosis costs ~1.3, close to the 1.5 per-run cap; if Bob hits it, a short follow-up still asks for the report.
 - Attack scripts undo their own changes a few seconds later, so part of Bob's "restore" is already done.
+
+## Guard (branch `guard-containment`, 2026-11-17; not merged, nothing pushed)
+
+Off by default (`GUARD_ENABLED`, and `COC_GUARD` on the bank host), so the demo behaves as before. See
+[`witness/guard/README.md`](../witness/guard/README.md) for settings, the API and the approver-token recipe.
+
+- **Alarm classifier** (`witness/guard/classify.js`): pure function over witness-side evidence; separates tamper,
+  a verified clean reconnect, silence, flapping and box-only claims. Reads no free text, so planted text
+  cannot change a verdict. `SITE_OUTAGE` and `PROBE_FAIL` are fixture-only: this witness watches one box.
+- **Soft containment** (`containment.js`, `approvals.js`): SEALED / PENDING / QUARANTINED / RESUMED / UNSTABLE in
+  front of the unchanged Layer 3 quarantine. Tamper evidence counts down 120 s to the existing quarantine;
+  ambiguous evidence stays sealed; approvals are API only. "Sealed" is a recorded state: it does not yet
+  block privileged actions on the host.
+- **Incident reports** (`report/`): built from the witness's own ledger with no key, stored in the ledger,
+  independently checkable with `report/verify-cli.js`; a report that fails verification is never served.
+- **Bob guardrails** (`bob/`): all 11 tool groups disabled, empty workspace, minimal environment, no shell;
+  injection-like input withheld; output schema-validated; any tool-call attempt is a ledger alert.
+  `BOB_ENABLED` is the master switch (also refuses "Diagnose with Bob").
+- Tests: witness 128/128 (`npm test`), box monitor 22/22; `npm run guard-demo` replays 41 checks with no key.
+  The existing Layer 1-3 code, the quarantine code and `auditor.html` are unchanged.
+
+### What running the real Bob service showed (2026-11-17)
+- Tool groups really are off: 0 `tool_use` events and `stats.tool_calls: 0`. Bob nevertheless wrote
+  invented tool calls and output as prose (a made-up directory listing and hostname); the schema rejects it.
+- The answer arrives as assistant chunks in `stream-json`, wrapped in a code fence; the adapter now reads that.
+- A narrative can still be wrong while passing every check (it read a sequence number as a count of 4
+  records, with "high" confidence). It is therefore shown labelled "AI-written; not verified".
+- The unrestricted defender (root, Docker socket) saw the planted instructions as untrusted and ignored
+  them: cost 1.257 of the 1.5 cap. So that Bob was not hijacked; the guardrails matter because they
+  remove the capability, not because one test run was fooled.
+- A scripted "hijacked" Bob is what the tests and the demo use; its failures are all stopped.
+
+### Not done
+- Live test of a Bob that actually obeys an injection (we could not make it); egress allowlist for the
+  Bob process (infrastructure, not code); guard state lives in witness memory (decisions are in the ledger);
+  the dashboard shows none of this (API only, by request); guard not run against the lab stack end to end.

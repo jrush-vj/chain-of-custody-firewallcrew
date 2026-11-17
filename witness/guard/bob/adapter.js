@@ -77,7 +77,8 @@ const untrustedFields = (report, records) => {
 };
 
 export const buildBundle = ({ report, records, canary = `CANARY-${randomBytes(8).toString('hex')}` }) => {
-  const scanned = prescan(untrustedFields(report, records));
+  const untrusted = untrustedFields(report, records);
+  const scanned = prescan(untrusted);
   const data = {
     do_not_repeat: canary,
     incident: { id: report.incident.id, class: report.classification.class, state: report.incident.state },
@@ -92,8 +93,9 @@ export const buildBundle = ({ report, records, canary = `CANARY-${randomBytes(8)
   // One line of JSON: attacker text is escaped by JSON.stringify and cannot break out of its string.
   const prompt = `${INSTRUCTIONS}\n\nDATA:\n${JSON.stringify(data)}`;
   const bundleNumbers = new Set([...numbersIn(JSON.stringify({ ...data, untrusted: scanned.fields.filter((f) => !f.withheld).map((f) => f.ref) })), ...numbersIn(report.incident.id)]);
-  const untrustedValues = untrustedFields(report, records).map((f) => String(f.value));
-  return { prompt, data, canary, flags: scanned.flags, bundleNumbers, untrustedValues };
+  const untrustedValues = untrusted.map((f) => String(f.value));
+  const flaggedValues = untrusted.filter((_, i) => scanned.fields[i].withheld).map((f) => String(f.value));
+  return { prompt, data, canary, flags: scanned.flags, bundleNumbers, untrustedValues, flaggedValues };
 };
 
 // Returns { status, ... }. status: ok | unavailable | rejected | suspect | tool_attempt.
@@ -112,16 +114,22 @@ export const createBobAdapter = ({ config, run = spawnBob, env = process.env, on
     }
     if (!result || result.failed || !Array.isArray(result.events)) return { status: 'unavailable', reason: 'Bob could not be run', flags: bundle.flags };
 
-    // Bob has no tools. Any attempt to call one is a tamper event, whatever else it said.
+    // Bob has no tools. Any attempt to call one is a tamper event, whatever else it said. Two independent
+    // signals (checked live against Bob Shell 2.1.0): a tool_use event per call, and stats.tool_calls.
+    const final = [...result.events].reverse().find((event) => event && event.type === 'result');
     const toolAttempts = result.events.filter((event) => event && event.type === 'tool_use');
-    if (toolAttempts.length > 0) {
+    const countedCalls = Number(final && final.stats && final.stats.tool_calls) || 0;
+    if (toolAttempts.length > 0 || countedCalls > 0) {
       const names = [...new Set(toolAttempts.map((event) => String(event.tool_name).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40)))];
-      onEvent({ type: 'tool_attempt', tools: names, count: toolAttempts.length });
+      const count = Math.max(toolAttempts.length, countedCalls);
+      onEvent({ type: 'tool_attempt', tools: names.length ? names : ['unknown'], count });
       return { status: 'tool_attempt', reason: 'Bob tried to call a tool', tools: names, flags: bundle.flags };
     }
 
-    const final = [...result.events].reverse().find((event) => event && event.type === 'result');
-    const text = final && typeof final.last_message === 'string' ? final.last_message : '';
+    // In stream-json the answer arrives as assistant message chunks; the result event carries only stats.
+    const text = result.events
+      .filter((event) => event && event.type === 'message' && event.role === 'assistant' && typeof event.content === 'string')
+      .map((event) => event.content).join('');
     const checked = validateOutput(text.trim(), bundle);
     if (!checked.ok) return { status: checked.suspect ? 'suspect' : 'rejected', reason: checked.reason, flags: bundle.flags };
     return { status: 'ok', value: checked.value, flags: bundle.flags, cost: final.stats?.session_costs ?? null };

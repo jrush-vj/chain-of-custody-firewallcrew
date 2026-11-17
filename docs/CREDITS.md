@@ -10,6 +10,16 @@ MIT licence in [LICENSE](../LICENSE).
 | Banking application | https://github.com/jtr-0901/Banking-system-fullstack | The banking app that the Layer 2 and Layer 3 demos run against, imported as `banking-system/`. Our witness integration (`banking-system/backend/services/witness*.js`) and the ct105 deploy scripts are ours. | MIT (upstream `package.json`) |
 | Cybersec detection project | https://github.com/JeevikaS-19/cybersec | Linked as the `cybersec/` submodule, pinned to `73cfe0c`, not modified. Its UI is served by the witness through `witness/auditor.html`. | **No licence file upstream.** Redistribution needs the author's permission. |
 
+## AI tools used
+
+- **IBM Bob** (Bob Shell 2.1.0, `@ibm/bob`): runs inside the demo as an incident responder (`deploy/local/bob/defender.mjs`) and, with the guard on, as an optional report narrator (`witness/guard/bob/`). It needs the operator's own `BOB_API_KEY` and IBM's licence terms; it is not redistributed here and is off unless enabled. The write-up's "AI tools used" section predates it.
+- **Claude Code** (Anthropic): code, tests and documentation. Commit trailers name Claude Haiku 5.5, Claude Sonnet 5, Claude Sonnet 5.5 and Claude Opus 5.5.
+- **GitHub Copilot**: code completion.
+
+## Fonts
+
+IBM Plex Sans and IBM Plex Mono (SIL Open Font License 1.1), served locally from `witness/fonts/` with the licence in `witness/fonts/OFL.txt`.
+
 ## Libraries
 
 Witness service (`witness/`): Node.js built-in modules only (`node:crypto`, `node:http`,

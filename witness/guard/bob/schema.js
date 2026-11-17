@@ -9,11 +9,31 @@ const NUMBER = /\d+(?:\.\d+)?/g;
 
 export const numbersIn = (text) => new Set(String(text).match(NUMBER) || []);
 
+// Bob wraps its JSON in one fenced block (seen live). Accept exactly that and nothing else: any prose around
+// the fence, or more than one block, is left as-is and fails the JSON parse.
+const FENCED = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/;
+export const unfence = (text) => {
+  const trimmed = String(text).trim();
+  const match = FENCED.exec(trimmed);
+  return match && !match[1].includes('```') ? match[1].trim() : trimmed;
+};
+
 // Returns { ok, value } or { ok: false, reason }. `bundleNumbers` is the set of numbers present in the bundle.
-export const validateOutput = (raw, { bundleNumbers, canary, untrustedValues = [] }) => {
+// Does `text` repeat any `size`-character stretch of `value`? Compared case- and spacing-insensitively, so an
+// attacker's instruction is caught even when it sits inside a longer string and is only partly quoted.
+const normalize = (s) => String(s).toLowerCase().replace(/\s+/g, ' ').trim();
+export const repeatsFragment = (text, value, size) => {
+  const haystack = normalize(text);
+  const needle = normalize(value);
+  if (needle.length < size) return needle.length >= 12 && haystack.includes(needle);
+  for (let i = 0; i + size <= needle.length; i += 1) if (haystack.includes(needle.slice(i, i + size))) return true;
+  return false;
+};
+
+export const validateOutput = (raw, { bundleNumbers, canary, untrustedValues = [], flaggedValues = [] }) => {
   let value;
   try {
-    value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    value = typeof raw === 'string' ? JSON.parse(unfence(raw)) : raw;
   } catch {
     return { ok: false, reason: 'output is not JSON' };
   }
@@ -31,8 +51,10 @@ export const validateOutput = (raw, { bundleNumbers, canary, untrustedValues = [
 
   const text = [value.summary, ...value.points].join('\n');
   if (canary && text.includes(canary)) return { ok: false, reason: 'canary echoed', suspect: true };
-  for (const untrusted of untrustedValues) {
-    if (untrusted.length >= 12 && text.includes(untrusted)) return { ok: false, reason: 'repeats attacker-controlled text', suspect: true };
+  // Text that looked like an instruction must never come back, even in part (24 characters); other attacker
+  // text may be quoted briefly (an ordinary command), but not at length (40 characters).
+  if (flaggedValues.some((value) => repeatsFragment(text, value, 24)) || untrustedValues.some((value) => repeatsFragment(text, value, 40))) {
+    return { ok: false, reason: 'repeats attacker-controlled text', suspect: true };
   }
   if (/https?:\/\/|```|<\s*\/?\s*(tool|system|function)/i.test(text)) return { ok: false, reason: 'output contains a link, code block or markup' };
   for (const number of numbersIn(text)) {

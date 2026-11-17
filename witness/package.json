@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "guard-demo": "node guard/demo.js"
   },
   "engines": {
     "node": ">=18"

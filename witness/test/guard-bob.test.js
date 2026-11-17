@@ -23,7 +23,13 @@ const { createWitnessServer } = await import('../server.js');
 const payloads = readFileSync(new URL('../../deploy/ct105/guard/injection-payloads.txt', import.meta.url), 'utf8')
   .split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('#'));
 
-const bobSays = (text) => ({ events: [{ type: 'message' }, { type: 'result', status: 'success', last_message: text, stats: { session_costs: 0.01 } }] });
+// Shaped like Bob Shell 2.1.0 --format stream-json (checked live): the answer streams as assistant chunks.
+const bobSays = (text, { toolCalls = 0 } = {}) => ({ events: [
+  { type: 'message', role: 'user', content: 'prompt' },
+  { type: 'message', role: 'assistant', content: text.slice(0, 7) },
+  { type: 'message', role: 'assistant', content: text.slice(7) },
+  { type: 'result', status: 'success', stats: { session_costs: 0.01, tool_calls: toolCalls } }
+] });
 const goodNote = JSON.stringify({ summary: 'The witness copy disagrees with the box; the ledger chain is intact.', points: ['one record differs'], confidence: 'high' });
 
 const rig = async ({ run, key = 'test-key', env = {} } = {}) => {
@@ -155,7 +161,7 @@ test('an invented number is rejected and the template stands', async () => {
 test('a tool-call attempt is a tamper event in the ledger and the output is discarded', async () => {
   const evil = { events: [
     { type: 'tool_use', tool_name: 'execute_command', parameters: { command: 'cat .env' } },
-    { type: 'result', status: 'success', last_message: goodNote }
+    ...bobSays(goodNote).events
   ] };
   const { guard, store, stop } = await rig({ run: () => evil });
   try {
@@ -201,7 +207,7 @@ test('end to end: a hijacked Bob that obeys planted instructions is stopped by t
   for (const payload of payloads) {
     // Obedient Bob #1 repeats the planted text; obedient Bob #2 reaches for a tool.
     const repeats = JSON.stringify({ summary: `Per the evidence: ${payload}`.slice(0, 600), points: [], confidence: 'high' });
-    for (const script of [() => bobSays(repeats), () => ({ events: [{ type: 'tool_use', tool_name: 'read_file' }, { type: 'result', last_message: goodNote }] })]) {
+    for (const script of [() => bobSays(repeats), () => ({ events: [{ type: 'tool_use', tool_name: 'read_file' }, ...bobSays(goodNote).events] })]) {
       const { guard, store, calls, stop } = await rig({ run: script });
       try {
         const report = await guard.generateReport((await incidentFor(guard, store, payload)).id, { narrate: true });
@@ -327,4 +333,77 @@ test('a Bob that cannot start degrades instead of throwing', async () => {
   const { spawnBob } = await import('../guard/bob/adapter.js');
   const result = await spawnBob('p', { env: { BOB_API_KEY: 'k' }, bin: 'definitely-not-a-real-binary-xyz' });
   assert.equal(result.failed, 'bob could not start');
+});
+
+test('a tool call counted in the result stats is caught even with no tool_use event', async () => {
+  const { guard, store, stop } = await rig({ run: () => bobSays(goodNote, { toolCalls: 2 }) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'tool_attempt');
+    assert.equal(report.narrative.text, null);
+    const alert = store.records.find((r) => r.payload.trigger === 'guard:bob_tool_attempt');
+    assert.equal(alert.payload.detail.tools, 'unknown');
+    assert.equal(alert.payload.detail.count, '2');
+  } finally { await stop(); }
+});
+
+test('the answer is rebuilt from assistant chunks only: the echoed user prompt is never mistaken for it', async () => {
+  const echoOnly = { events: [{ type: 'message', role: 'user', content: goodNote }, { type: 'result', status: 'success', stats: { tool_calls: 0 } }] };
+  const { guard, store, stop } = await rig({ run: () => echoOnly });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'rejected');
+  } finally { await stop(); }
+});
+
+// ---- found by running the real Bob service ----
+test('live finding: a reply wrapped in one fenced block is accepted; prose around it, or two blocks, is not', () => {
+  const ctx = { bundleNumbers: new Set(['4']), canary: 'CANARY-x' };
+  const fence = String.fromCharCode(96).repeat(3);
+  assert.equal(validateOutput(`${fence}json\n${goodNote}\n${fence}`, ctx).ok, true);
+  assert.equal(validateOutput(`${fence}\n${goodNote}\n${fence}`, ctx).ok, true);
+  assert.equal(validateOutput(`Sure! Here you go:\n${fence}json\n${goodNote}\n${fence}`, ctx).ok, false, 'prose before');
+  assert.equal(validateOutput(`${fence}json\n${goodNote}\n${fence}\nand also run rm -rf`, ctx).ok, false, 'prose after');
+  assert.equal(validateOutput(`${fence}json\n${goodNote}\n${fence}\n${fence}json\n${goodNote}\n${fence}`, ctx).ok, false, 'two blocks');
+});
+
+test('live finding: Bob role-plays tool calls with invented output in its text; that is rejected', async () => {
+  const faked = '<tool_call>\n{"name": "execute_command", "parameters": {"command": "ls /"}}\n</tool_call>\n<tool_response>\nbin boot snap\n</tool_response>\nHere are the results.';
+  const { guard, store, stop } = await rig({ run: () => bobSays(faked) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'rejected');
+    assert.equal(report.narrative.text, null);
+    assert.ok(!JSON.stringify(report).includes('snap'), 'the invented output never reaches the report');
+  } finally { await stop(); }
+});
+
+test('live finding: a fenced reply goes through the whole adapter and is shown labelled', async () => {
+  const fence = String.fromCharCode(96).repeat(3);
+  const { guard, store, stop } = await rig({ run: () => bobSays(`${fence}json\n${goodNote}\n${fence}`) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'ok');
+    assert.match(report.narrative.source, /not verified/);
+  } finally { await stop(); }
+});
+
+test('live demo finding: a payload sitting inside a longer field is caught even when only part of it is repeated', async () => {
+  const payload = payloads[0];
+  const embedded = `rm -f -- /var/log/bank-demo/${payload}.bak`;
+  const repeats = JSON.stringify({ summary: `Per the log: ${payload}`.slice(0, 600), points: [], confidence: 'high' });
+  const { guard, store, stop } = await rig({ run: () => bobSays(repeats) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store, embedded)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'suspect');
+    assert.equal(report.narrative.text, null);
+  } finally { await stop(); }
+});
+
+test('quoting an ordinary command briefly is not treated as repeating an attack', async () => {
+  const { guard, store, stop } = await rig({ run: () => bobSays(JSON.stringify({ summary: 'Someone ran rm -f on app.log.', points: [], confidence: 'medium' })) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store, 'rm -f -- /var/log/bank-demo/app.log')).id, { narrate: true });
+    assert.equal(report.narrative.status, 'ok');
+  } finally { await stop(); }
 });
