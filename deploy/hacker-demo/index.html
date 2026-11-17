@@ -1,203 +1,193 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Chain of Custody - Hacker Demo</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: 'Monaco', 'Courier New', monospace;
-      background: #0a0e27;
-      color: #00ff41;
-      display: flex;
-      height: 100vh;
-      overflow: hidden;
-    }
-    .container { display: flex; width: 100%; height: 100%; }
-    .panel { flex: 1; border-right: 2px solid #00ff41; padding: 20px; overflow-y: auto; }
-    .panel.right { border-right: none; }
-    h1 { font-size: 1.5em; margin-bottom: 20px; text-shadow: 0 0 10px #00ff41; }
-    .attack-button {
-      width: 100%;
-      padding: 15px;
-      margin: 10px 0;
-      background: #1a1f3a;
-      border: 2px solid #00ff41;
-      color: #00ff41;
-      font-family: monospace;
-      font-size: 1em;
-      cursor: pointer;
-      border-radius: 4px;
-      transition: all 0.3s;
-    }
-    .attack-button:hover {
-      background: #00ff41;
-      color: #0a0e27;
-      box-shadow: 0 0 20px #00ff41;
-    }
-    .attack-button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-    .attack-button.running { background: #ff6600; color: #0a0e27; }
-    .status { margin-top: 20px; padding: 10px; background: #1a1f3a; border-left: 4px solid #00ff41; }
-    .chat-log {
-      background: #000;
-      border: 1px solid #00ff41;
-      height: 80%;
-      overflow-y: auto;
-      padding: 15px;
-      margin-bottom: 15px;
-      font-size: 0.9em;
-      line-height: 1.6;
-    }
-    .chat-message {
-      margin: 8px 0;
-      padding: 8px;
-      border-left: 3px solid #00ff41;
-      padding-left: 10px;
-    }
-    .chat-message.error { border-left-color: #ff4444; color: #ff8888; }
-    .chat-message.success { border-left-color: #00ff41; color: #00ff41; }
-    .chat-message.info { border-left-color: #ffff00; color: #ffff00; }
-    .chat-message.alert { border-left-color: #ff6600; color: #ff6600; animation: blink 1s infinite; }
-    @keyframes blink { 0%, 49%, 100% { opacity: 1; } 50%, 99% { opacity: 0.5; } }
-    .input-box {
-      display: flex;
-      gap: 10px;
-    }
-    input {
-      flex: 1;
-      padding: 10px;
-      background: #1a1f3a;
-      border: 1px solid #00ff41;
-      color: #00ff41;
-      font-family: monospace;
-      border-radius: 4px;
-    }
-    button { padding: 10px 20px; background: #00ff41; color: #0a0e27; border: none; cursor: pointer; border-radius: 4px; font-weight: bold; }
-    button:hover { box-shadow: 0 0 15px #00ff41; }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chain of Custody · Red team console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 3 28 10v12L16 29 4 22V10z' fill='%23111827'/%3E%3Ccircle cx='16' cy='16' r='4.5' fill='%23c42b2b'/%3E%3C/svg%3E">
+<style>
+/* Same visual system as the witness dashboard and the Secure Sphere console (hackfest). */
+@font-face{font-family:"IBM Plex Sans";font-weight:400;font-display:swap;src:url("/fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-weight:500;font-display:swap;src:url("/fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Sans";font-weight:600;font-display:swap;src:url("/fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-weight:400;font-display:swap;src:url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2")}
+@font-face{font-family:"IBM Plex Mono";font-weight:500;font-display:swap;src:url("/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2")}
+:root{
+  --bg:#f3f4f6;--surface:#fff;--sunk:#f7f8fa;--line:#e2e5ea;--line-2:#cdd2da;
+  --ink:#111827;--ink-2:#4b5563;--ink-3:#6b7280;--accent:#2445d6;--accent-bg:#eef1fd;
+  --ok:#15803d;--ok-bg:#ecf8f0;--trap:#b45309;--trap-bg:#fdf4e7;--bad:#c42b2b;--bad-bg:#fcecec;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular","Cascadia Code",Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font:400 14px/1.45 var(--sans);display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.topbar{display:flex;align-items:center;gap:16px;padding:12px 20px;background:var(--surface);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;margin-right:auto}
+.brand svg{width:30px;height:30px}.brand path{fill:var(--ink)}.brand circle{fill:var(--bad)}
+.brand h1{font-size:17px}.tagline{margin:1px 0 0;font-size:12px;color:var(--ink-3)}
+.chip{display:inline-flex;align-items:center;gap:8px;min-height:32px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--sunk);font-size:12px;font-weight:500}
+.chip::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ink-3)}
+.chip.on::before{background:var(--ok);box-shadow:0 0 0 3px var(--ok-bg)}.chip.off::before{background:var(--bad)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:36px;padding:0 14px;border-radius:8px;border:1px solid var(--line-2);background:var(--surface);cursor:pointer;font-weight:500;font-size:13px;text-decoration:none;color:var(--ink);transition:background .15s,border-color .15s}
+.btn:hover{border-color:var(--ink-3)}
+.btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}.btn.danger:hover{background:#a82424}
+.btn.primary{background:var(--ink);border-color:var(--ink);color:#fff}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.grid{flex:1;min-height:0;display:grid;gap:12px;padding:12px;grid-template-columns:minmax(0,5fr) minmax(0,7fr)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;min-height:0}
+.panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.panel h2{font-size:14px}
+.count{font:500 12px var(--mono);color:var(--ink-3)}
+.attacks{display:flex;flex-direction:column;gap:10px;overflow:auto}
+.atk{border:1px solid var(--line);border-left:3px solid var(--line-2);border-radius:8px;padding:12px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:start}
+.atk.running{border-left-color:var(--trap)}.atk.done{border-left-color:var(--bad)}.atk.failed{border-left-color:var(--ink-3)}
+.atk h3{font-size:15px;grid-column:1}
+.atk p{margin:0;color:var(--ink-2);font-size:13px;grid-column:1}
+.atk .catch{color:var(--ink-3);font-size:12.5px}
+.atk .act{grid-column:2;grid-row:1 / span 3;display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.tag{display:inline-block;font:500 10.5px/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:4px 6px;border-radius:4px;background:var(--sunk);color:var(--ink-2)}
+.tag.trap{background:var(--trap-bg);color:var(--trap)}.tag.bad{background:var(--bad-bg);color:var(--bad)}.tag.ok{background:var(--ok-bg);color:var(--ok)}
+.next{margin-top:12px;padding:12px 14px;border-radius:8px;background:var(--accent-bg);border:1px solid #d5ddfb;color:#1e3a8a;font-size:13.5px}
+.next b{color:var(--accent)}
+.next.ready{background:var(--ok-bg);border-color:#c4e8d0;color:#14532d}
+.log{flex:1;min-height:0;overflow:auto;list-style:none;margin:0;padding:10px 12px;border-radius:8px;background:var(--sunk);border:1px solid var(--line);font:12.5px/1.6 var(--mono)}
+.log li{display:grid;grid-template-columns:70px minmax(0,1fr);gap:10px;padding:3px 0;border-bottom:1px dashed var(--line)}
+.log li:last-child{border-bottom:0}
+.log .t{color:var(--ink-3)}.log .x{white-space:pre-wrap;overflow-wrap:anywhere}
+.log .error .x{color:var(--bad)}.log .success .x{color:var(--ok)}.log .alert .x{color:var(--trap);font-weight:500}.log .info .x{color:var(--ink-2)}
+.log .head .x{color:var(--ink);font-weight:500}
+@media (max-width:900px){.grid{grid-template-columns:1fr}.log{min-height:320px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
 </head>
 <body>
-  <div class="container">
-    <div class="panel left">
-      <h1>⚔️ Attack Layers</h1>
-      <button class="attack-button" onclick="launchAttack(1)">Layer 1: Honeypot Bypass</button>
-      <button class="attack-button" onclick="launchAttack(2)">Layer 2: Database Tamper</button>
-      <button class="attack-button" onclick="launchAttack(3)">Layer 3: Network Cut & Lockout</button>
-      <div class="status">
-        <p>Server: <span id="server-status">checking...</span></p>
-        <p>Witness: <span id="witness-status">checking...</span></p>
-        <p>SSH: <span id="ssh-status">checking...</span></p>
-      </div>
-    </div>
-
-    <div class="panel right">
-      <h1>🔍 Attack Log</h1>
-      <div class="chat-log" id="chatLog"></div>
-      <div class="input-box">
-        <input type="text" id="sshInput" placeholder="SSH: user@192.168.31.77 (optional custom command)" />
-        <button onclick="customAttack()">Run</button>
-      </div>
-    </div>
+<header class="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 3 28 10v12L16 29 4 22V10z"/><circle cx="16" cy="16" r="4.5"/></svg>
+    <div><h1>Chain of Custody · Red team console</h1><p class="tagline">Attacks run as root on the bank server (lab container)</p></div>
   </div>
+  <span class="chip" id="lab-status">Bank server</span>
+  <span class="chip" id="witness-status">Witness</span>
+  <a class="btn" href="http://localhost:8787/" target="_blank" rel="noopener">Open witness dashboard ↗</a>
+</header>
 
-  <script>
-    const chatLog = document.getElementById('chatLog');
-    const sshInput = document.getElementById('sshInput');
-    const apiBase = 'http://127.0.0.1:3000';
+<main class="grid">
+  <section class="panel" aria-labelledby="h-attacks">
+    <div class="panel-head"><h2 id="h-attacks">Attacks</h2><button class="btn primary" id="run-all" type="button">Launch all three in order</button></div>
+    <div class="attacks">
+      <article class="atk" id="atk1">
+        <span><span class="tag">Layer 1</span></span>
+        <h3>Tamper with the bank log</h3>
+        <p>Rewrites, appends to, wipes and deletes <code>app.log</code> using the guarded commands.</p>
+        <p class="catch">Should be caught by: honeypot command wrappers and the file baseline.</p>
+        <div class="act"><span class="tag" id="st1">Ready</span><button class="btn danger" type="button" data-layer="1">Launch</button></div>
+      </article>
+      <article class="atk" id="atk2">
+        <span><span class="tag">Layer 2</span></span>
+        <h3>Edit committed transactions</h3>
+        <p>Changes an amount, flips a type and marks a payment failed, directly in Postgres.</p>
+        <p class="catch">Should be caught by: the witness's sealed copies and bank reconciliation.</p>
+        <div class="act"><span class="tag" id="st2">Ready</span><button class="btn danger" type="button" data-layer="2">Launch</button></div>
+      </article>
+      <article class="atk" id="atk3">
+        <span><span class="tag">Layer 3</span></span>
+        <h3>Cut the bank off from the witness</h3>
+        <p>Points the bank's witness address somewhere unreachable and restarts the backend.</p>
+        <p class="catch">Should be caught by: the link-settings guard; Layer 3 quarantine (dry run).</p>
+        <div class="act"><span class="tag" id="st3">Ready</span><button class="btn danger" type="button" data-layer="3">Launch</button></div>
+      </article>
+    </div>
+    <p class="next" id="next" role="status">Launch the attacks. Afterwards, open the witness dashboard and press <b>Diagnose with Bob</b>: IBM Bob walks you through what happened, layer by layer.</p>
+  </section>
 
-    function addChat(msg, type = 'info') {
-      const div = document.createElement('div');
-      div.className = `chat-message ${type}`;
-      div.textContent = msg;
-      chatLog.appendChild(div);
-      chatLog.scrollTop = chatLog.scrollHeight;
+  <section class="panel" aria-labelledby="h-log">
+    <div class="panel-head"><h2 id="h-log">Attack log</h2><span class="count" id="log-count">0 lines</span></div>
+    <ol class="log" id="log" aria-live="polite"></ol>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const IST = { hour12: false, timeZone: "Asia/Kolkata" };
+const done = new Set();
+let lines = 0, busy = false;
+
+// Output comes from the attack scripts; it is added with textContent only.
+function addLog(msg, type = "info") {
+  const li = document.createElement("li"), t = document.createElement("span"), x = document.createElement("span");
+  li.className = type; t.className = "t"; x.className = "x";
+  t.textContent = new Date().toLocaleTimeString("en-GB", IST); x.textContent = msg;
+  li.append(t, x); $("log").appendChild(li); $("log").scrollTop = $("log").scrollHeight;
+  $("log-count").textContent = `${++lines} line${lines === 1 ? "" : "s"}`;
+}
+
+function setState(layer, state, label) {
+  $("atk" + layer).className = "atk " + state;
+  const tag = $("st" + layer);
+  tag.className = "tag " + ({ running: "trap", done: "bad", failed: "" }[state] || "");
+  tag.textContent = label;
+}
+
+async function checkStatus() {
+  try {
+    const data = await (await fetch("/status")).json();
+    $("lab-status").className = "chip " + (data.lab ? "on" : "off");
+    $("lab-status").textContent = data.lab ? "Bank server ready" : "Bank server down";
+    $("witness-status").className = "chip " + (data.witness ? "on" : "off");
+    $("witness-status").textContent = data.witness ? "Witness connected" : "Witness unreachable";
+  } catch (e) {
+    $("lab-status").className = "chip off"; $("lab-status").textContent = "Console API down";
+  }
+}
+
+function lockButtons(locked) {
+  busy = locked;
+  for (const b of document.querySelectorAll("button[data-layer], #run-all")) b.disabled = locked;
+}
+
+async function launchAttack(layer) {
+  setState(layer, "running", "Running…");
+  addLog(`Launching Layer ${layer} attack on the bank server`, "head");
+  try {
+    const res = await fetch("/attack", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ layer }) });
+    const data = await res.json();
+    for (const line of String(data.output || data.error || "").split("\n")) if (line.trim()) addLog(line, data.success ? "info" : "error");
+    if (data.success) {
+      setState(layer, "done", "Launched"); done.add(layer);
+      addLog(`Layer ${layer} attack finished`, "alert");
+    } else {
+      setState(layer, "failed", "Failed"); addLog(`Layer ${layer} attack failed`, "error");
     }
+  } catch (e) {
+    setState(layer, "failed", "Failed"); addLog(`Error: ${e.message}`, "error");
+  }
+  if (done.size === 3) {
+    $("next").className = "next ready";
+    $("next").innerHTML = 'All three attacks are done. Open the <a href="http://localhost:8787/" target="_blank" rel="noopener">witness dashboard</a> and press <b>Diagnose with Bob</b>.';
+  }
+  checkStatus();
+}
 
-    async function checkStatus() {
-      try {
-        const res = await fetch(`${apiBase}/status`);
-        const data = await res.json();
-        document.getElementById('server-status').textContent = data.server ? '✓ Ready' : '✗ Down';
-        document.getElementById('witness-status').textContent = data.witness ? '✓ Connected' : '✗ Disconnected';
-        document.getElementById('ssh-status').textContent = data.ssh ? '✓ Open' : '✗ Closed';
-      } catch (e) {
-        document.getElementById('server-status').textContent = '✗ API Error';
-      }
-    }
+document.querySelector(".attacks").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-layer]");
+  if (!b || busy) return;
+  lockButtons(true);
+  await launchAttack(Number(b.dataset.layer));
+  lockButtons(false);
+});
+$("run-all").addEventListener("click", async () => {
+  if (busy) return;
+  lockButtons(true);
+  for (const layer of [1, 2, 3]) await launchAttack(layer);
+  lockButtons(false);
+});
 
-    async function launchAttack(layer) {
-      const btn = event.target;
-      btn.disabled = true;
-      btn.classList.add('running');
-      addChat(`[*] Launching Layer ${layer} attack...`, 'info');
-
-      try {
-        const res = await fetch(`${apiBase}/attack`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ layer })
-        });
-        const data = await res.json();
-
-        if (data.success) {
-          addChat(`[✓] Layer ${layer} attack executed`, 'success');
-          data.output?.split('\n').forEach(line => {
-            if (line.trim()) addChat(`  → ${line}`, 'info');
-          });
-          addChat(`[!] Check witness dashboard for detections`, 'alert');
-        } else {
-          addChat(`[✗] Attack failed: ${data.error}`, 'error');
-        }
-      } catch (e) {
-        addChat(`[✗] Error: ${e.message}`, 'error');
-      } finally {
-        btn.disabled = false;
-        btn.classList.remove('running');
-      }
-
-      // Re-check status after attack
-      setTimeout(checkStatus, 2000);
-    }
-
-    async function customAttack() {
-      const cmd = sshInput.value.trim();
-      if (!cmd) return addChat('[✗] No command entered', 'error');
-
-      addChat(`[*] Running: ${cmd}`, 'info');
-      sshInput.value = '';
-
-      try {
-        const res = await fetch(`${apiBase}/run`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cmd })
-        });
-        const data = await res.json();
-
-        if (data.success) {
-          data.output?.split('\n').forEach(line => {
-            if (line.trim()) addChat(`  ${line}`, 'info');
-          });
-        } else {
-          addChat(`[✗] ${data.error}`, 'error');
-        }
-      } catch (e) {
-        addChat(`[✗] Error: ${e.message}`, 'error');
-      }
-
-      setTimeout(checkStatus, 1000);
-    }
-
-    // Check status every 5 seconds
-    checkStatus();
-    setInterval(checkStatus, 5000);
-
-    // Log initial message
-    addChat('🔓 Hacker demo loaded. Choose an attack or run custom SSH commands.', 'success');
-  </script>
+checkStatus(); setInterval(checkStatus, 5000);
+addLog("Red team console ready. Each attack runs on the bank server and takes up to a few minutes.", "success");
+</script>
 </body>
 </html>

@@ -15,6 +15,10 @@ const hmacSecret = process.env.WITNESS_HMAC_SECRET || '';
 const dataPath = process.env.WITNESS_DATA_PATH || '/var/lib/banking-witness/ledger.jsonl';
 const maxBodyBytes = 16 * 1024;
 const html = readFileSync(new URL('./auditor.html', import.meta.url), 'utf8');
+// IBM Plex (OFL, fonts/OFL.txt) for the dashboard, read once; only these names are served.
+const fonts = new Map(['mono-latin-400', 'mono-latin-500', 'sans-latin-400', 'sans-latin-500', 'sans-latin-600']
+  .map((name) => `ibm-plex-${name}-normal.woff2`)
+  .map((file) => [`/fonts/${file}`, readFileSync(new URL(`./fonts/${file}`, import.meta.url))]));
 // Set on ct105-ai only after the Layer 1 command tripwire is installed there; otherwise the card reads IDLE.
 const layer1Enabled = process.env.WITNESS_LAYER1_ENABLED === '1';
 // ct105's monitor sends a heartbeat every negotiated interval; this many missed beats raise silence.
@@ -26,7 +30,8 @@ const holderNames = ['SOC lead', 'Auditor', 'Compliance officer'];
 const LAYER2_KINDS = new Set(['sequence_gap', 'chain_break', 'bad_signature', 'unknown_key_id', 'entry_edited',
   'entry_deleted', 'entries_reordered', 'entry_replayed', 'late_entry', 'challenge_mismatch',
   'bad_challenge_signature', 'record_mismatch', 'non_monotonic_timestamp', 'silence', 'missed_challenge',
-  'bad_heartbeat', 'replayed_heartbeat', 'balance_misreported', 'db_edited_without_log']);
+  'bad_heartbeat', 'replayed_heartbeat', 'balance_misreported', 'db_edited_without_log',
+  'bob_response']);  // IBM Bob defender reports (deploy/local/bob), always state "normal"
 
 const readBody = async (request) => {
   const chunks = [];
@@ -58,7 +63,9 @@ const toEpochSeconds = (value) => (value ? Date.parse(value) / 1000 : null);
 // 'quarantine:locked' event that no later event releases. Without one, the witness still presumes a
 // quarantine when ct105 has been silent past the threshold (only after the first contact).
 const quarantineState = (store, nowMs = Date.now()) => {
-  const latest = store.recentLayerEvents().filter((item) => item.layer === 3 && !item.resolved).at(-1);
+  // bob:* events are IBM Bob's briefs about Layer 3, not ct105 state; they must not mask a quarantine.
+  const latest = store.recentLayerEvents()
+    .filter((item) => item.layer === 3 && !item.resolved && !item.trigger.startsWith('bob:')).at(-1);
   const base = {
     after: quarantineAfterS,
     needed: 2,
@@ -122,6 +129,7 @@ const auditorStatus = (store) => {
       ? 'alert'
       : reconciliation.state === 'ok' && hasVerifiedRecords ? 'normal' : 'unknown',
     quarantine: quarantineState(store),
+    bob_diagnosis: store.bobDiagnosis,
     records: recordCounts(store),
     bank_reconciliation: {
       state: reconciliation.state,
@@ -355,6 +363,29 @@ const validateLayerEvent = (event) => {
   }
 };
 
+// Bob's diagnosis report. Bob's text is LLM output about attacker activity: untrusted, so it is only
+// size-checked here and the dashboard renders it as plain text.
+const validateDiagnosisReport = (payload) => {
+  const invalid = (message) => {
+    const error = new Error(message);
+    error.statusCode = 400;
+    throw error;
+  };
+  const text = (value, max) => value === undefined || (typeof value === 'string' && value.length <= max);
+  if (!payload || typeof payload !== 'object' || typeof payload.id !== 'string') invalid('Report needs an id');
+  if (!['running', 'done', 'failed'].includes(payload.state)) invalid('state must be running, done or failed');
+  if (!text(payload.summary, 600) || !text(payload.cost, 20)) invalid('summary or cost too long');
+  if (payload.seconds !== undefined && !Number.isFinite(payload.seconds)) invalid('seconds must be a number');
+  const layers = payload.layers ?? [];
+  if (!Array.isArray(layers) || layers.length > 3) invalid('layers must be up to 3 entries');
+  for (const item of layers) {
+    if (!item || typeof item !== 'object' || ![1, 2, 3].includes(item.layer) || !text(item.status, 40) ||
+        !text(item.what, 1200) || !text(item.did, 1800) || !text(item.result, 800)) {
+      invalid('each layer needs layer 1-3 and short status/what/did/result text');
+    }
+  }
+};
+
 const validateEvent = (event) => {
   const expectedFields = ['event_id', 'transaction_id', 'type', 'amount_minor', 'occurred_at'];
   if (
@@ -503,6 +534,57 @@ export const createWitnessServer = (store) =>
         store.recordActivity(ok ? 'restore_completed' : 'restore_failed', summary);
         return sendJson(response, 200, { status: 'acknowledged' });
       }
+      // Website "Diagnose with Bob" button: same shape as restore-request. The Bob defender polls with a
+      // signed request. These use authorize(), not authorizeContact(): Bob polling is not ct105 contact.
+      if (request.method === 'POST' && pathname === '/v1/diagnose-request') {
+        await readBody(request);
+        // Each request starts a paid Bob run with root on the lab: only this dashboard may ask.
+        const origin = request.headers.origin;
+        if (origin && origin !== `http://${request.headers.host}` && origin !== `https://${request.headers.host}`) {
+          return sendJson(response, 403, { error: 'Cross-origin request refused' });
+        }
+        const now = Date.now();
+        const busy = store.diagnoseRequest || store.bobDiagnosis?.state === 'running';
+        // A request no defender finished within 15 min (defender stopped or crashed) no longer blocks the button.
+        const stale = busy && now - Date.parse(store.bobDiagnosis?.requested_at) > 15 * 60_000;
+        if (busy && !stale) {
+          return sendJson(response, 409, { status: 'already_running', id: store.bobDiagnosis?.id });
+        }
+        if (now - store.lastDiagnoseRequestAt < 60_000) {
+          const retry = Math.ceil((60_000 - (now - store.lastDiagnoseRequestAt)) / 1000);
+          return sendJson(response, 429, { status: 'rate_limited', retry_after_s: retry });
+        }
+        store.lastDiagnoseRequestAt = now;
+        store.diagnoseRequest = { id: randomUUID(), requested_at: new Date(now).toISOString() };
+        store.bobDiagnosis = { ...store.diagnoseRequest, state: 'requested' };
+        return sendJson(response, 202, { status: 'requested', id: store.diagnoseRequest.id });
+      }
+      if (request.method === 'GET' && pathname === '/v1/diagnose-pending') {
+        authorize(request, pathname, '');
+        return sendJson(response, 200, { pending: store.diagnoseRequest });
+      }
+      if (request.method === 'POST' && pathname === '/v1/diagnose-report') {
+        const body = await readBody(request);
+        authorize(request, pathname, body);
+        let payload;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          return sendJson(response, 400, { error: 'Invalid JSON body' });
+        }
+        validateDiagnosisReport(payload);
+        if (!store.bobDiagnosis || payload.id !== store.bobDiagnosis.id) {
+          return sendJson(response, 404, { error: 'No such diagnosis request' });
+        }
+        store.diagnoseRequest = null;  // picked up
+        store.bobDiagnosis = {
+          id: payload.id, requested_at: store.bobDiagnosis.requested_at, state: payload.state,
+          updated_at: new Date().toISOString(), summary: payload.summary ?? '', cost: payload.cost ?? '',
+          seconds: payload.seconds ?? null,
+          layers: (payload.layers ?? []).map(({ layer, status, what, did, result }) => ({ layer, status, what, did, result }))
+        };
+        return sendJson(response, 200, { status: 'recorded' });
+      }
       // Key-holder approval for a confirmed quarantine. The quarantine is a dry run, so nothing on ct105
       // needs unlocking: two approvals only record a release on the witness.
       if (request.method === 'POST' && pathname === '/quarantine/approve') {
@@ -544,11 +626,17 @@ export const createWitnessServer = (store) =>
         }
         return sendJson(response, 200, { status: 'recorded', approvals });
       }
+      if (request.method === 'GET' && fonts.has(pathname)) {
+        response.writeHead(200, { 'content-type': 'font/woff2', 'cache-control': 'public, max-age=86400',
+          'x-content-type-options': 'nosniff' });
+        response.end(fonts.get(pathname));
+        return;
+      }
       if (request.method === 'GET' && pathname === '/') {
         response.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
           'cache-control': 'no-store',
-          'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'",
+          'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; font-src 'self'; connect-src 'self'",
           'x-content-type-options': 'nosniff'
         });
         response.end(html);

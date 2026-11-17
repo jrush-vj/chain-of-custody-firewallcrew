@@ -1000,3 +1000,93 @@ test('a tamper is reported with the last healthy record and the window in which 
     await cleanup();
   }
 });
+
+test('an IBM Bob brief on Layer 3 does not hide a confirmed quarantine', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-bob-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const getJson = async (route) => (await fetch(`http://127.0.0.1:${server.address().port}${route}`)).json();
+  try {
+    await store.recordLayerEvent({ layer: 3, trigger: 'quarantine:locked', state: 'alert', summary: 'locked',
+      detail: { quarantine_id: 'q-bob-1' }, who: {} });
+    await store.recordLayerEvent({ layer: 3, trigger: 'bob:report', state: 'normal', summary: 'Bob restored the link',
+      detail: { status: 'contained' }, who: { agent: 'ibm-bob' } });
+    const { quarantine } = await getJson('/status');
+    assert.equal(quarantine.active, true);
+    assert.equal(quarantine.id, 'q-bob-1');
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('"Diagnose with Bob": the button queues one request, the signed defender picks it up and reports per layer', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-diag-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const signed = (method, route, body = '') => {
+    const timestamp = String(Date.now());
+    return fetch(`${baseUrl}${route}`, { method, body: body || undefined, headers: {
+      'content-type': 'application/json', 'x-witness-node': process.env.WITNESS_NODE_ID, 'x-witness-timestamp': timestamp,
+      'x-witness-signature': createHmac('sha256', process.env.WITNESS_HMAC_SECRET)
+        .update(`${method}\n${route}\n${timestamp}\n${body}`).digest('hex') } });
+  };
+  try {
+    assert.equal((await fetch(`${baseUrl}/v1/diagnose-pending`)).status, 401, 'polling must be signed');
+    const requested = await fetch(`${baseUrl}/v1/diagnose-request`, { method: 'POST' });
+    assert.equal(requested.status, 202);
+    const { id } = await requested.json();
+    assert.equal((await fetch(`${baseUrl}/v1/diagnose-request`, { method: 'POST' })).status, 409);
+    assert.equal((await (await fetch(`${baseUrl}/status`)).json()).bob_diagnosis.state, 'requested');
+
+    const contactBefore = store.lastContactAt;
+    assert.equal((await (await signed('GET', '/v1/diagnose-pending')).json()).pending.id, id);
+    assert.equal(store.lastContactAt, contactBefore, 'Bob polling is not ct105 contact');
+
+    const forged = JSON.stringify({ id, state: 'done', summary: 'forged' });
+    assert.equal((await fetch(`${baseUrl}/v1/diagnose-report`, { method: 'POST', body: forged })).status, 401);
+    const tooBig = JSON.stringify({ id, state: 'done', layers: [{ layer: 4 }] });
+    assert.equal((await signed('POST', '/v1/diagnose-report', tooBig)).status, 400);
+
+    assert.equal((await signed('POST', '/v1/diagnose-report', JSON.stringify({ id, state: 'running' }))).status, 200);
+    assert.equal((await (await signed('GET', '/v1/diagnose-pending')).json()).pending, null, 'picked up once');
+    const report = { id, state: 'done', summary: 'Three attacks, all undone.', cost: '0.400', seconds: 50,
+      layers: [1, 2, 3].map((layer) => ({ layer, status: 'contained', what: `w${layer}`, did: `d${layer}`, result: `r${layer}` })) };
+    assert.equal((await signed('POST', '/v1/diagnose-report', JSON.stringify(report))).status, 200);
+    const diagnosis = (await (await fetch(`${baseUrl}/status`)).json()).bob_diagnosis;
+    assert.equal(diagnosis.state, 'done');
+    assert.deepEqual(diagnosis.layers.map((l) => l.did), ['d1', 'd2', 'd3']);
+    assert.equal((await fetch(`${baseUrl}/v1/diagnose-request`, { method: 'POST' })).status, 429, 'one per minute');
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('"Diagnose with Bob" refuses other origins and frees the button after a stale request', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-diag2-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const ask = (headers = {}) => fetch(`${baseUrl}/v1/diagnose-request`, { method: 'POST', headers });
+  try {
+    assert.equal((await ask({ origin: 'https://evil.example' })).status, 403);
+    assert.equal((await ask({ origin: baseUrl })).status, 202, 'the dashboard itself may ask');
+    store.bobDiagnosis.requested_at = new Date(Date.now() - 16 * 60_000).toISOString();
+    store.lastDiagnoseRequestAt = 0;
+    assert.equal((await ask()).status, 202, 'a 16-minute-old request no longer blocks');
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

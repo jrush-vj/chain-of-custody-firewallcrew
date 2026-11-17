@@ -15,5 +15,12 @@ RUN apt-get update && apt-get install -y \
 COPY --from=docker:cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
 
+# IBM Bob Shell for the defender (deploy/local/bob/defender.mjs): Bob runs here so its shell is the
+# bank server itself, not the Windows host. Pinned to the version tested on the laptop.
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:24-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && npm install -g @ibm/bob@2.1.0 && npm cache clean --force
+
 WORKDIR /opt/chain-of-custody
 ENTRYPOINT ["/bin/bash"]

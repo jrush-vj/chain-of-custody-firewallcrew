@@ -8,6 +8,9 @@
 # backend without stranding the witness. Use deploy/local/test-stack.sh, which creates a throwaway
 # .env with matching WITNESS_* values.
 services:
+  postgres:
+    ports: !reset []           # nothing on the host needs it; avoids clashing with other local Postgres
+
   backend:
     network_mode: "service:witness"
     ports: !reset []

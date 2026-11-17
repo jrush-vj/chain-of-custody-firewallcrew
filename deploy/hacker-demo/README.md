@@ -4,7 +4,10 @@ A browser-based demo interface showing Layer 1, 2, and 3 attacks on the banking 
 
 ## Setup
 
-1. **Install Node.js** (v18+)
+1. **Install Node.js** (v18+) and start the local stack and lab (laptop testing):
+   ```bash
+   bash deploy/local/test-stack.sh up && bash deploy/local/test-stack.sh lab-up
+   ```
 2. **Run the API server:**
    ```bash
    cd deploy/hacker-demo
@@ -12,15 +15,15 @@ A browser-based demo interface showing Layer 1, 2, and 3 attacks on the banking 
    ```
 3. **Open in browser:**
    ```
-   http://localhost:3000
+   http://localhost:3300
    ```
 
 ## How it works
 
-- **Left panel:** buttons for Layer 1, 2, 3 attacks. They trigger `ssh ... coc.sh attack N` on your server.
-- **Right panel:** live chat log showing attack output and witness detections.
-- **Status:** shows real-time connection to the server, witness, and SSH.
-- **Custom commands:** enter any SSH command to run on the server.
+- **Left panel:** buttons for Layer 1, 2, 3 attacks. They run `coc.sh attack N` inside the `coc-lab` container (the bank server) with `docker exec`.
+- **Right panel:** live log showing attack output.
+- **Status:** whether the lab container and the witness are reachable.
+- There is deliberately no free-form command box, and the API only answers same-origin requests.
 
 ## Attacks
 
@@ -32,14 +35,9 @@ A browser-based demo interface showing Layer 1, 2, and 3 attacks on the banking 
 
 ## Demo flow
 
-1. Register a user on http://192.168.31.77:3001
-2. Make a deposit (it's witnessed)
-3. Open this demo UI and trigger attacks
-4. Watch the witness dashboard at http://localhost:8787 show detections
-5. After Layer 3, run "Restore" button on the witness dashboard to unlock
-
-## Notes
-
-- SSH key login recommended; you'll be asked for passwords otherwise
-- Attacks call the existing `coc.sh` scripts on the server
-- The demo runs the same attacks that Jeevika tests on `main`
+1. Start the Bob defender: `node deploy/local/bob/defender.mjs` (needs `BOB_API_KEY`).
+2. Make some witnessed transactions: `bash deploy/local/test-stack.sh traffic` (Layer 2 needs them).
+3. On this console, launch the attacks (one by one, or "Launch all three in order").
+4. Open the witness dashboard at http://localhost:8787 and press **Diagnose with Bob**. Bob checks the
+   bank server, undoes anything still damaged, and walks you through Layer 1, 2 and 3 (about 2 minutes).
+5. Layer 3 leaves a dry-run quarantine on the witness: clear it with "Restore to normal".

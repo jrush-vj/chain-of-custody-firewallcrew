@@ -17,7 +17,7 @@
 #   bash deploy/local/test-stack.sh all       up + every check above + lab-up
 #   bash deploy/local/test-stack.sh down      stop and delete the stack, its volumes, lab and .env
 #
-# Ports (loopback only): 3001 site, 8081 backend, 8787 witness, 5432 postgres.
+# Ports (loopback only): 3001 site, 8081 backend, 8787 witness (postgres has no host port).
 set -Eeuo pipefail
 export MSYS_NO_PATHCONV=1
 

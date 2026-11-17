@@ -1,125 +1,77 @@
 #!/usr/bin/env node
 /**
- * Demo API backend for the hacker UI.
- * Triggers the server's existing coc.sh attack scripts and returns results.
- * Run: node server.js
+ * Hacker demo: buttons that run the existing Layer 1/2/3 attack scripts inside the local lab
+ * container (coc-lab, the stand-in for the bank server). LOCAL TESTING ONLY.
+ * Start the stack and lab first: bash deploy/local/test-stack.sh up && bash deploy/local/test-stack.sh lab-up
+ * Run: node server.js, then open http://localhost:3300
  */
 
-import http from 'http';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import http from 'node:http';
+import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 
-const execAsync = promisify(exec);
+const run = promisify(execFile);
+const PORT = Number(process.env.PORT) || 3300;
+const LAB = process.env.COC_LAB || 'coc-lab';
+const WITNESS = process.env.WITNESS_URL || 'http://127.0.0.1:8787';
+const page = new URL('./index.html', import.meta.url);
+// IBM Plex, shared with the witness dashboard (witness/fonts, OFL); only these names are served.
+const FONTS = new Set(['mono-latin-400', 'mono-latin-500', 'sans-latin-400', 'sans-latin-500', 'sans-latin-600']
+  .map((name) => `/fonts/ibm-plex-${name}-normal.woff2`));
 
-const PORT = 3000;
-const SERVER_IP = '192.168.31.77';
-const SSH_USER = 'jrush-vj'; // Change if needed
-
-// CORS and JSON parsing middleware
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
+// No shell: fixed argv, the layer is checked to be 1, 2 or 3 before it gets here.
+const inLab = (args, timeout) => run('docker',
+  ['exec', LAB, 'bash', '/opt/chain-of-custody/deploy/local/lab/run.sh', ...args],
+  { timeout, maxBuffer: 10 * 1024 * 1024 });
 
 async function checkStatus() {
-  try {
-    const { stdout: server } = await execAsync(
-      `curl -s -m 2 http://${SERVER_IP}:3001/ | head -c 20`,
-      { shell: '/bin/bash' }
-    );
-    const { stdout: witness } = await execAsync(
-      `curl -s -m 2 http://127.0.0.1:8787/health | head -c 20`,
-      { shell: '/bin/bash' }
-    );
-    const { stdout: ssh } = await execAsync(
-      `timeout 2 ssh -o ConnectTimeout=1 ${SSH_USER}@${SERVER_IP} exit 2>&1 || true`,
-      { shell: '/bin/bash' }
-    );
-
-    return {
-      server: server.length > 0,
-      witness: witness.includes('status'),
-      ssh: !ssh.includes('refused') && !ssh.includes('timeout'),
-    };
-  } catch {
-    return { server: false, witness: false, ssh: false };
-  }
+  const up = (p) => p.then(() => true, () => false);
+  const [lab, witness] = await Promise.all([
+    up(run('docker', ['exec', LAB, 'true'], { timeout: 5000 })),
+    up(fetch(`${WITNESS}/health`, { signal: AbortSignal.timeout(2000) }).then((r) => { if (!r.ok) throw new Error(); }))
+  ]);
+  return { lab, witness };
 }
 
 async function runAttack(layer) {
-  const cmd = `ssh -t ${SSH_USER}@${SERVER_IP} "sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh attack ${layer} 2>&1"`;
   try {
-    const { stdout, stderr } = await execAsync(cmd, { shell: '/bin/bash', timeout: 60000 });
-    return { success: true, output: (stdout + stderr).slice(0, 2000) };
+    const { stdout, stderr } = await inLab(['bash', 'deploy/ct105/coc.sh', 'attack', String(layer)], 600000);
+    return { success: true, output: (stdout + stderr).slice(-4000) };
   } catch (error) {
-    return { success: false, error: error.message || 'Attack failed' };
+    return { success: false, error: ((error.stdout || '') + (error.stderr || '') || error.message).slice(-2000) };
   }
 }
 
-async function runCommand(cmd) {
-  try {
-    // Only allow safe commands (no rm, no sudo without explicit attack)
-    if (cmd.includes('rm ') || cmd.includes('shutdown')) {
-      return { success: false, error: 'Command not allowed' };
-    }
-
-    const fullCmd = cmd.startsWith('ssh ')
-      ? cmd
-      : `ssh ${SSH_USER}@${SERVER_IP} "${cmd}"`;
-
-    const { stdout, stderr } = await execAsync(fullCmd, {
-      shell: '/bin/bash',
-      timeout: 30000,
-      maxBuffer: 10 * 1024 * 1024
-    });
-    return { success: true, output: (stdout + stderr).slice(0, 2000) };
-  } catch (error) {
-    return { success: false, error: error.message || 'Command failed' };
-  }
-}
+const send = (res, code, body, type = 'application/json') => {
+  res.writeHead(code, { 'Content-Type': type });
+  res.end(type === 'application/json' ? JSON.stringify(body) : body);
+};
 
 const server = http.createServer(async (req, res) => {
-  res.writeHead(200, corsHeaders);
-
-  // Handle CORS preflight
-  if (req.method === 'OPTIONS') {
-    res.end();
-    return;
-  }
-
-  let body = '';
-  req.on('data', chunk => { body += chunk.toString(); });
-
-  req.on('end', async () => {
-    try {
-      if (req.url === '/status' && req.method === 'GET') {
-        const status = await checkStatus();
-        res.end(JSON.stringify(status));
-      } else if (req.url === '/attack' && req.method === 'POST') {
-        const { layer } = JSON.parse(body);
-        if (![1, 2, 3].includes(layer)) {
-          res.end(JSON.stringify({ success: false, error: 'Invalid layer' }));
-          return;
-        }
-        const result = await runAttack(layer);
-        res.end(JSON.stringify(result));
-      } else if (req.url === '/run' && req.method === 'POST') {
-        const { cmd } = JSON.parse(body);
-        const result = await runCommand(cmd);
-        res.end(JSON.stringify(result));
-      } else {
-        res.statusCode = 404;
-        res.end(JSON.stringify({ error: 'Not found' }));
-      }
-    } catch (e) {
-      res.statusCode = 500;
-      res.end(JSON.stringify({ error: e.message }));
+  try {
+    // DNS rebinding: a hostile page that rebinds its name to 127.0.0.1 still sends its own Host header.
+    if (![`localhost:${PORT}`, `127.0.0.1:${PORT}`].includes(req.headers.host)) return send(res, 421, { error: 'Bad host' });
+    if (req.method === 'GET' && req.url === '/') return send(res, 200, await readFile(page), 'text/html; charset=utf-8');
+    if (req.method === 'GET' && FONTS.has(req.url)) {
+      return send(res, 200, await readFile(new URL(`../../witness${req.url}`, import.meta.url)), 'font/woff2');
     }
-  });
+    if (req.method === 'GET' && req.url === '/status') return send(res, 200, await checkStatus());
+    if (req.method === 'POST' && req.url === '/attack') {
+      // Same-origin only: a page on another site must not be able to fire attacks at localhost.
+      if (req.headers['content-type'] !== 'application/json') return send(res, 415, { error: 'JSON only' });
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 1024) return send(res, 413, { error: 'Too large' }); }
+      const { layer } = JSON.parse(body);
+      if (![1, 2, 3].includes(layer)) return send(res, 400, { success: false, error: 'Invalid layer' });
+      return send(res, 200, await runAttack(layer));
+    }
+    send(res, 404, { error: 'Not found' });
+  } catch (e) {
+    send(res, 500, { error: e.message });
+  }
 });
 
-server.listen(PORT, 'localhost', () => {
-  console.log(`\n🔓 Hacker demo API running on http://localhost:${PORT}`);
-  console.log(`   Open http://localhost:${PORT} in your browser\n`);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Hacker demo on http://localhost:${PORT} (attacks run in container ${LAB})`);
 });
