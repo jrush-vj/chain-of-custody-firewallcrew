@@ -10,16 +10,17 @@ import TransactionForm from './components/Transactions/TransactionForm';
 import Payments from './components/Payments/Payments';
 import Bills from './components/Bills/Bills';
 import Navbar from './components/Layout/Navbar';
+import { Spinner } from './components/Common/Common';
 import './App.css';
 
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
   
   if (loading) {
-    return <div className="loading">Loading...</div>;
+    return <Spinner label="Checking your session…" />;
   }
-  
-  return user ? children : <Navigate to="/login" />;
+
+  return user ? children : <Navigate to="/login" replace />;
 };
 
 function App() {
@@ -81,6 +82,7 @@ function App() {
                 }
               />
               <Route path="/" element={<Navigate to="/dashboard" />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </main>
         </div>

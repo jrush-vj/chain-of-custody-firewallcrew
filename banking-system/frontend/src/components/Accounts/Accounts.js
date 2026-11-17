@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import apiClient from '../../lib/apiClient';
+import { formatCurrency } from '../../lib/format';
+import { CopyButton } from '../Common/Common';
 import './Accounts.css';
 
 const Accounts = () => {
@@ -11,10 +13,7 @@ const Accounts = () => {
   const [formData, setFormData] = useState({ account_type: 'checking' });
   const [modalState, setModalState] = useState(null);
   const [modalMessage, setModalMessage] = useState('');
-<<<<<<< HEAD
-=======
   const [modalPending, setModalPending] = useState(false);
->>>>>>> firewallcrew-publish
   const [modalLoading, setModalLoading] = useState(false);
 
   const fetchAccounts = useCallback(async () => {
@@ -65,19 +64,13 @@ const Accounts = () => {
       transferAccountId: ''
     });
     setModalMessage('');
-<<<<<<< HEAD
-=======
     setModalPending(false);
->>>>>>> firewallcrew-publish
   };
 
   const closeModal = () => {
     setModalState(null);
     setModalMessage('');
-<<<<<<< HEAD
-=======
     setModalPending(false);
->>>>>>> firewallcrew-publish
     setModalLoading(false);
   };
 
@@ -90,21 +83,14 @@ const Accounts = () => {
 
     setModalLoading(true);
     setModalMessage('');
-<<<<<<< HEAD
-    try {
-      await apiClient.post('/api/transactions/transfer', {
-=======
     setModalPending(false);
     try {
       const response = await apiClient.post('/api/transactions/transfer', {
->>>>>>> firewallcrew-publish
         from_account_id: modalState.account.id,
         to_account_id: Number(modalState.transferAccountId),
-        amount: parseFloat(modalState.account.balance)
+        amount: String(modalState.account.balance)
       });
       await fetchAccounts();
-<<<<<<< HEAD
-=======
       if (response.data.witness_status === 'pending') {
         setModalPending(true);
         setModalMessage(
@@ -116,7 +102,6 @@ const Accounts = () => {
         );
         return;
       }
->>>>>>> firewallcrew-publish
       setModalState((prev) => ({
         ...prev,
         stage: 'confirm',
@@ -124,16 +109,12 @@ const Accounts = () => {
       }));
       setModalMessage('Balance transferred. You can now delete the account.');
     } catch (err) {
-<<<<<<< HEAD
-      setModalMessage(err.response?.data?.error || 'Unable to transfer remaining funds.');
-=======
       setModalPending(err.response?.data?.witness_status === 'pending');
       setModalMessage(
         err.response?.data?.message ||
           err.response?.data?.error ||
           'Unable to transfer remaining funds.'
       );
->>>>>>> firewallcrew-publish
     } finally {
       setModalLoading(false);
     }
@@ -143,10 +124,6 @@ const Accounts = () => {
     if (!modalState?.account) return;
     setModalLoading(true);
     setModalMessage('');
-<<<<<<< HEAD
-    try {
-      await apiClient.delete(`/api/accounts/${modalState.account.id}`);
-=======
     setModalPending(false);
     try {
       const response = await apiClient.delete(`/api/accounts/${modalState.account.id}`);
@@ -161,25 +138,33 @@ const Accounts = () => {
         );
         return;
       }
->>>>>>> firewallcrew-publish
       setAccounts((prev) => prev.filter((acc) => acc.id !== modalState.account.id));
       announceSuccess('Account deleted successfully.');
       closeModal();
     } catch (err) {
-<<<<<<< HEAD
-      setModalMessage(err.response?.data?.error || 'Failed to delete account.');
-=======
       setModalPending(err.response?.data?.witness_status === 'pending');
       setModalMessage(
         err.response?.data?.message ||
           err.response?.data?.error ||
           'Failed to delete account.'
       );
->>>>>>> firewallcrew-publish
     } finally {
       setModalLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!modalState) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && !modalLoading) {
+        setModalState(null);
+        setModalMessage('');
+        setModalPending(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [modalState, modalLoading]);
 
   const availableTargets = useMemo(() => {
     if (!modalState?.account) return [];
@@ -204,7 +189,7 @@ const Accounts = () => {
         <div className="header-actions">
           <div className="stat">
             <span>Total balance</span>
-            <strong>${totalBalance.toFixed(2)}</strong>
+            <strong>{formatCurrency(totalBalance)}</strong>
           </div>
           <button className="btn-primary" onClick={() => setShowForm((prev) => !prev)}>
             {showForm ? 'Close form' : 'Create account'}
@@ -245,10 +230,15 @@ const Accounts = () => {
             <article key={account.id} className="account-card advanced">
               <header>
                 <span>{account.account_type}</span>
-                <strong>${parseFloat(account.balance).toFixed(2)}</strong>
+                <strong>{formatCurrency(account.balance)}</strong>
               </header>
-              <p className="muted">{account.account_number}</p>
-              {account.iban && <p className="muted">IBAN: {account.iban}</p>}
+              <p className="muted mono">{account.account_number}</p>
+              {account.iban && (
+                <p className="muted iban-line">
+                  <span className="mono">{account.iban}</span>
+                  <CopyButton value={account.iban} label="Copy IBAN" />
+                </p>
+              )}
               <small>Opened {new Date(account.created_at).toLocaleDateString()}</small>
               <div className="card-actions">
                 <button className="ghost-button" onClick={() => openDeleteModal(account)}>
@@ -261,16 +251,16 @@ const Accounts = () => {
       )}
 
       {modalState && (
-        <div className="modal-backdrop">
-          <div className="modal-card">
-            <h3>
+        <div className="modal-backdrop" onClick={(e) => e.target === e.currentTarget && !modalLoading && closeModal()}>
+          <div className="modal-card" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+            <h3 id="account-modal-title">
               {modalState.stage === 'transfer'
                 ? 'Move funds before deleting'
                 : 'Confirm account deletion'}
             </h3>
             <p>
               Account <strong>{modalState.account.account_number}</strong> currently holds{' '}
-              <strong>${parseFloat(modalState.account.balance).toFixed(2)}</strong>.
+              <strong>{formatCurrency(modalState.account.balance)}</strong>.
             </p>
             {modalState.stage === 'transfer' ? (
               <>
@@ -290,7 +280,7 @@ const Accounts = () => {
                       <option value="">Choose account</option>
                       {availableTargets.map((acc) => (
                         <option key={acc.id} value={acc.id}>
-                          {acc.account_number} · ${parseFloat(acc.balance).toFixed(2)}
+                          {acc.account_number} · {formatCurrency(acc.balance)}
                         </option>
                       ))}
                     </select>
@@ -319,15 +309,11 @@ const Accounts = () => {
                 </button>
               </div>
             )}
-<<<<<<< HEAD
-            {modalMessage && <div className="modal-message">{modalMessage}</div>}
-=======
             {modalMessage && (
               <div className={`modal-message${modalPending ? ' pending-message' : ''}`}>
                 {modalMessage}
               </div>
             )}
->>>>>>> firewallcrew-publish
           </div>
         </div>
       )}

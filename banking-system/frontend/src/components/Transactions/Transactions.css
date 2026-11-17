@@ -121,3 +121,59 @@
     font-size: 0.85rem;
   }
 }
+
+/* ---- Enhancements: all transaction types, signed amounts, loading state ---- */
+
+.transaction-type {
+  white-space: nowrap;
+}
+
+.transaction-type.external_incoming {
+  background: rgba(164, 139, 255, 0.18);
+  color: #d3c7ff;
+}
+
+.transaction-type.external_outgoing {
+  background: rgba(246, 195, 67, 0.18);
+  color: #ffe3a1;
+}
+
+.transactions-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.transactions-table .amount {
+  font-weight: 600;
+}
+
+.transactions-table .amount.in {
+  color: var(--success);
+}
+
+.transactions-table .amount.out {
+  color: var(--danger);
+}
+
+.transactions-table tbody tr {
+  transition: background 0.15s;
+}
+
+.transactions-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.status.failed {
+  color: var(--danger);
+}
+
+.status.pending {
+  color: var(--warning);
+}
+
+.panel.is-loading {
+  opacity: 0.6;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}

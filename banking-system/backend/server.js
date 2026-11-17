@@ -16,15 +16,13 @@ import transactionRoutes from './routes/transactions.js';
 import scheduledPaymentRoutes from './routes/scheduledPayments.js';
 import paymentPortalRoutes from './routes/paymentPortal.js';
 import { sanitizeRequest } from './middleware/sanitize.js';
-<<<<<<< HEAD
-=======
 import { startWitnessOutboxRetry } from './services/witnessedTransactions.js';
->>>>>>> firewallcrew-publish
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const isProduction = process.env.NODE_ENV === 'production';
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim())
@@ -40,10 +38,19 @@ app.use(
 );
 app.use(
   cors({
-    origin: allowedOrigins.length ? allowedOrigins : true,
+    // Without an explicit allowlist only same-origin requests (no Origin header) get CORS
+    // headers in production; reflecting every origin with credentials would let any site
+    // drive a logged-in user's session.
+    origin: allowedOrigins.length ? allowedOrigins : !isProduction,
     credentials: true
   })
 );
+
+// Health check (before the rate limiter so container/deploy probes never consume the budget)
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
 app.use(cookieParser());
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
@@ -51,15 +58,21 @@ app.use(sanitizeRequest);
 app.use(requestLogger);
 app.use(apiLimiter);
 
-// Swagger Documentation
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+// Swagger Documentation (off in production unless explicitly enabled)
+if (!isProduction || process.env.ENABLE_API_DOCS === 'true') {
+  app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+}
 
 // Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/accounts', accountRoutes);
 app.use('/api/transactions', transactionRoutes);
 app.use('/api/scheduled-payments', scheduledPaymentRoutes);
-app.use('/send-payment', paymentPortalRoutes);
+// The tokenless portal credits any IBAN without authentication; keep it off in production
+// unless explicitly enabled for a demo.
+if (!isProduction || process.env.ENABLE_PAYMENT_PORTAL === 'true') {
+  app.use('/send-payment', paymentPortalRoutes);
+}
 
 // Root metadata
 app.get('/', (req, res) => {
@@ -71,11 +84,6 @@ app.get('/', (req, res) => {
   });
 });
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
 // Error handling
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -85,10 +93,7 @@ const startServer = async () => {
   try {
     await connectDB();
     await createTables();
-<<<<<<< HEAD
-=======
     startWitnessOutboxRetry();
->>>>>>> firewallcrew-publish
     
     // Check if SSL is enabled
     if (process.env.USE_SSL === 'true') {
@@ -141,7 +146,3 @@ process.on('SIGINT', async () => {
 startServer();
 
 
-<<<<<<< HEAD
-
-=======
->>>>>>> firewallcrew-publish

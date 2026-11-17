@@ -1,3 +1,6 @@
+// Keys that could alter an object's prototype when copied onto it.
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 const sanitizeValue = (value) => {
   if (typeof value === 'string') {
     return value.replace(/\0/g, '').trim();
@@ -9,7 +12,9 @@ const sanitizeValue = (value) => {
 
   if (value && typeof value === 'object') {
     return Object.entries(value).reduce((acc, [key, val]) => {
-      acc[key] = sanitizeValue(val);
+      if (!FORBIDDEN_KEYS.has(key)) {
+        acc[key] = sanitizeValue(val);
+      }
       return acc;
     }, {});
   }

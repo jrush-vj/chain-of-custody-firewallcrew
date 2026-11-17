@@ -6,4 +6,5 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/default/banking-deploy
 ExecStart=/usr/bin/bash /opt/chain-of-custody/deploy/ct105/deploy-banking.sh

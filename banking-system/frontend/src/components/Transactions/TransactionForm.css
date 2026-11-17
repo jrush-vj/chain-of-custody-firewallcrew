@@ -1,11 +1,7 @@
-.transaction-form-page h1 {
-  margin: 0.5rem 0;
-}
-
 .transaction-form {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 1.1rem;
 }
 
 .transaction-form label {
@@ -17,11 +13,12 @@
 
 .transaction-form select,
 .transaction-form input {
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-field);
+  border: 1px solid var(--field-border);
+  background: var(--field-bg);
   color: white;
   padding: 0.85rem;
+  width: 100%;
 }
 
 .transfer-grid {
@@ -31,5 +28,114 @@
 }
 
 .form-card {
-  max-width: 640px;
+  max-width: 680px;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.segmented button {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 12px;
+  padding: 0.65rem 0.5rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.segmented button:hover {
+  color: var(--text);
+}
+
+.segmented button.active {
+  background: rgba(90, 216, 255, 0.18);
+  color: #fff;
+}
+
+.form-hint {
+  margin-top: -0.4rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.amount-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.amount-input > span {
+  position: absolute;
+  left: 0.95rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.transaction-form .amount-input input {
+  padding-left: 1.9rem;
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.transaction-form input[aria-invalid='true'] {
+  border-color: rgba(255, 139, 167, 0.6);
+}
+
+.quick-amounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: -0.4rem;
+}
+
+.chip {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+}
+
+.chip:hover {
+  border-color: rgba(90, 216, 255, 0.5);
+  background: rgba(90, 216, 255, 0.08);
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.balance-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-field);
+  background: rgba(90, 216, 255, 0.06);
+  border: 1px solid rgba(90, 216, 255, 0.18);
+  font-size: 0.9rem;
+}
+
+.balance-preview div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.balance-preview strong {
+  font-variant-numeric: tabular-nums;
 }

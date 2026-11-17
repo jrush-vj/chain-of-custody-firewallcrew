@@ -193,3 +193,118 @@
     font-size: 0.8rem;
   }
 }
+
+/* ---- Overview header, quick actions, witness coverage ---- */
+
+.dashboard-hero {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1.25rem;
+}
+
+.dashboard-hero h1 {
+  margin: 0.4rem 0;
+  font-size: clamp(1.8rem, 4vw, 2.5rem);
+  letter-spacing: -0.02em;
+}
+
+.quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.quick-actions a,
+.panel-header a {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.summary-card {
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.summary-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(90, 216, 255, 0.3);
+}
+
+.summary-card.primary {
+  background: linear-gradient(135deg, rgba(90, 216, 255, 0.28), rgba(90, 211, 162, 0.12) 60%, rgba(5, 10, 31, 0.85));
+}
+
+.summary-card.witness {
+  background: linear-gradient(135deg, rgba(90, 211, 162, 0.16), rgba(5, 10, 31, 0.85));
+}
+
+.coverage-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  margin: 0.25rem 0 0.5rem;
+}
+
+.coverage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #5ad3a2, #5ad8ff);
+  transition: width 0.6s ease;
+}
+
+.charts-grid .chart-panel.wide {
+  grid-column: 1 / -1;
+}
+
+.iban-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.amount-cell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.amount-cell.in {
+  color: var(--success);
+}
+
+.amount-cell.out {
+  color: var(--danger);
+}
+
+.tag {
+  white-space: nowrap;
+}
+
+.tag.external_incoming {
+  background: rgba(164, 139, 255, 0.15);
+  color: #d3c7ff;
+}
+
+.tag.external_outgoing {
+  background: rgba(246, 195, 67, 0.15);
+  color: #ffe3a1;
+}
+
+.transactions-table tbody tr {
+  transition: background 0.15s;
+}
+
+.transactions-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.empty-state a {
+  color: var(--accent);
+}

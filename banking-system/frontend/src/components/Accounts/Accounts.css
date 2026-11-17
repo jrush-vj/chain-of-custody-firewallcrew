@@ -188,3 +188,20 @@
     align-items: stretch;
   }
 }
+
+.iban-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.account-card.advanced {
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.account-card.advanced:hover {
+  transform: translateY(-2px);
+  border-color: rgba(90, 216, 255, 0.3);
+}

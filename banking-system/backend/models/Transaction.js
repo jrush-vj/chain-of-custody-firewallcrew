@@ -10,10 +10,6 @@ export class Transaction {
     status = 'completed',
     options = {}
   ) {
-<<<<<<< HEAD
-    const pool = getPool();
-
-=======
     return this.createWithClient(getPool(), fromAccountId, toAccountId, amount, type, status, options);
   }
 
@@ -26,7 +22,6 @@ export class Transaction {
     status = 'completed',
     options = {}
   ) {
->>>>>>> firewallcrew-publish
     if (type === 'deposit' && !options.external_from_name) {
       options.external_from_name = 'CASH IN';
     }
@@ -34,11 +29,7 @@ export class Transaction {
       options.external_to_name = 'CASH OUT';
     }
     
-<<<<<<< HEAD
-    const result = await pool.query(
-=======
     const result = await client.query(
->>>>>>> firewallcrew-publish
       `INSERT INTO transactions (
         from_account_id,
         to_account_id,
@@ -123,12 +114,14 @@ export class Transaction {
   static async findByUserId(userId, filters = {}) {
     const pool = getPool();
     let query = `
-      SELECT t.*, 
+      SELECT t.*,
         fa.account_number as from_account_number,
-        ta.account_number as to_account_number
+        ta.account_number as to_account_number,
+        wo.status as witness_status
       FROM transactions t
       LEFT JOIN accounts fa ON t.from_account_id = fa.id
       LEFT JOIN accounts ta ON t.to_account_id = ta.id
+      LEFT JOIN witness_outbox wo ON wo.transaction_id = t.id
       WHERE (fa.user_id = $1 OR ta.user_id = $1)
     `;
     

@@ -169,7 +169,7 @@
   color: #9be6ff;
 }
 
-.btn-primary {
+.auth-panel .btn-primary {
   background: linear-gradient(120deg, #5ad3a2, #5ad8ff);
   color: #051023;
   border: none;
@@ -181,12 +181,12 @@
   transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.btn-primary:hover:not(:disabled) {
+.auth-panel .btn-primary:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 15px 35px rgba(90, 216, 255, 0.35);
 }
 
-.btn-primary:disabled {
+.auth-panel .btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

@@ -135,8 +135,6 @@ export const createTables = async () => {
     `);
 
     await pool.query(`
-<<<<<<< HEAD
-=======
       CREATE TABLE IF NOT EXISTS witness_outbox (
         event_id UUID PRIMARY KEY,
         transaction_id INTEGER NOT NULL REFERENCES transactions(id) ON DELETE CASCADE,
@@ -155,7 +153,6 @@ export const createTables = async () => {
     `);
 
     await pool.query(`
->>>>>>> firewallcrew-publish
       ALTER TABLE transactions
         ADD COLUMN IF NOT EXISTS external_from_name VARCHAR(150)
     `);
@@ -261,10 +258,7 @@ export const dropTables = async () => {
   
   try {
     await pool.query('DROP TABLE IF EXISTS scheduled_payments CASCADE');
-<<<<<<< HEAD
-=======
     await pool.query('DROP TABLE IF EXISTS witness_outbox CASCADE');
->>>>>>> firewallcrew-publish
     await pool.query('DROP TABLE IF EXISTS transactions CASCADE');
     await pool.query('DROP TABLE IF EXISTS accounts CASCADE');
     await pool.query('DROP TABLE IF EXISTS users CASCADE');

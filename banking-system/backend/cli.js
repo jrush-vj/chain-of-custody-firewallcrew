@@ -12,15 +12,12 @@ dotenv.config();
 
 const program = new Command();
 
-<<<<<<< HEAD
-=======
 const rejectProductionCliTransaction = () => {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('CLI money movement is disabled in production; use the witness-integrated API');
   }
 };
 
->>>>>>> firewallcrew-publish
 program
   .name('banking-cli')
   .description('Interactive CLI tool for banking system management')
@@ -284,10 +281,7 @@ program
   .option('-m, --amount <amount>', 'Amount')
   .action(async (options) => {
     try {
-<<<<<<< HEAD
-=======
       rejectProductionCliTransaction();
->>>>>>> firewallcrew-publish
       let { accountId, amount } = options;
       
       if (!accountId || !amount) {
@@ -344,10 +338,7 @@ program
   .option('-m, --amount <amount>', 'Amount')
   .action(async (options) => {
     try {
-<<<<<<< HEAD
-=======
       rejectProductionCliTransaction();
->>>>>>> firewallcrew-publish
       let { accountId, amount } = options;
       
       if (!accountId || !amount) {
@@ -415,10 +406,7 @@ program
   .option('-m, --amount <amount>', 'Amount')
   .action(async (options) => {
     try {
-<<<<<<< HEAD
-=======
       rejectProductionCliTransaction();
->>>>>>> firewallcrew-publish
       let { from, to, amount } = options;
       
       if (!from || !to || !amount) {
@@ -1038,8 +1026,6 @@ async function handleTransactionOperations() {
   ]);
 
   if (operation === 'back') return;
-<<<<<<< HEAD
-=======
   if (
     process.env.NODE_ENV === 'production' &&
     ['deposit', 'withdraw', 'transfer'].includes(operation)
@@ -1047,7 +1033,6 @@ async function handleTransactionOperations() {
     console.error('CLI money movement is disabled in production; use the witness-integrated API.');
     return;
   }
->>>>>>> firewallcrew-publish
 
   await connectDB();
   try {

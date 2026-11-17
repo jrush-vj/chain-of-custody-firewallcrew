@@ -45,7 +45,8 @@ print("active" if q["active"] else "inactive", "confirmed" if q["confirmed"] els
 
 # Waits until the witness shows the wanted quarantine state ("confirmed" or "presumed"), printing as it goes.
 wait_for_quarantine() {
-  local want="$1" limit="$2" deadline=$((SECONDS + limit)) seen
+  local want="$1" limit="$2" deadline seen
+  deadline=$((SECONDS + limit))
   while [ "$SECONDS" -lt "$deadline" ]; do
     seen="$(quarantine_state)"
     printf '%s  witness quarantine: %s\n' "$(ist)" "$seen"

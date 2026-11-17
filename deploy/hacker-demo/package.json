@@ -1,0 +1,13 @@
+{
+  "name": "coc-hacker-demo",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Demo UI for Chain of Custody attack simulation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": ["demo", "attack", "witness"],
+  "author": "",
+  "license": "MIT"
+}

@@ -1,7 +1,5 @@
-import jwt from 'jsonwebtoken';
 import { getSessionCookieName } from '../utils/cookies.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || 'insecure-default-secret';
+import { verifySessionToken } from '../utils/tokens.js';
 
 export const authenticateToken = (req, res, next) => {
   const cookieToken = req.cookies?.[getSessionCookieName()];
@@ -9,21 +7,23 @@ export const authenticateToken = (req, res, next) => {
 
   if (!token) {
     const authHeader = req.headers['authorization'];
-    token = authHeader && authHeader.split(' ')[1];
+    const [scheme, value] = String(authHeader || '').split(' ');
+    token = scheme === 'Bearer' ? value : null;
   }
 
   if (!token) {
     return res.status(401).json({ error: 'Access token required' });
   }
 
-  jwt.verify(token, JWT_SECRET, (err, payload) => {
-    if (err) {
-      return res.status(401).json({ error: 'Invalid or expired token' });
-    }
-    req.user = {
-      id: payload.sub || payload.id,
-      email: payload.email
-    };
-    next();
-  });
+  let payload;
+  try {
+    payload = verifySessionToken(token);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+  req.user = {
+    id: payload.sub,
+    email: payload.email
+  };
+  next();
 };

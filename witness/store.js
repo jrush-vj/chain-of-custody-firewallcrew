@@ -43,6 +43,11 @@ export class WitnessStore {
     this.lastRandomChallengeAt = 0;
     this.restoreRequest = null;        // one pending website restore, picked up by ct105
     this.lastRestoreRequestAt = 0;     // rate limit: one request per minute
+    // "Diagnose with Bob" (deploy/local/bob/defender.mjs). shortcut: memory only, lost on restart; persist
+    // to the ledger if the diagnosis must be part of the audit trail.
+    this.diagnoseRequest = null;       // one pending website request, picked up by the Bob defender
+    this.lastDiagnoseRequestAt = 0;
+    this.bobDiagnosis = null;          // { id, state: running|done|failed, summary, layers[], ... }
     this.queue = Promise.resolve();
     this.integrityError = null;
     this.lastSuccessfulReconciliationAt = null;

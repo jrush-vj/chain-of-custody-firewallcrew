@@ -9,15 +9,13 @@ import {
   externalOutgoingValidation
 } from '../middleware/validation.js';
 import { requireExternalApiKey } from '../middleware/externalApiKey.js';
-<<<<<<< HEAD
-
-const router = express.Router();
-
-=======
+import { requireWitnessReconcileAuth } from '../middleware/witnessReconcileAuth.js';
 import { executeWitnessedTransaction } from '../services/witnessedTransactions.js';
 import { getPool } from '../config/database.js';
 
 const router = express.Router();
+
+const TRANSACTION_TYPES = ['deposit', 'withdrawal', 'transfer', 'external_incoming', 'external_outgoing'];
 
 const sendTransactionResult = (res, result, message, details = {}) =>
   res.status(result.pendingWitness ? 202 : 201).json({
@@ -30,7 +28,6 @@ const sendTransactionResult = (res, result, message, details = {}) =>
     ...details
   });
 
->>>>>>> firewallcrew-publish
 /**
  * @swagger
  * /api/transactions/external/incoming:
@@ -68,11 +65,8 @@ const sendTransactionResult = (res, result, message, details = {}) =>
  *     responses:
  *       201:
  *         description: Incoming payment registered
-<<<<<<< HEAD
-=======
  *       202:
  *         description: Payment recorded locally; witness confirmation is pending
->>>>>>> firewallcrew-publish
  */
 router.post(
   '/external/incoming',
@@ -86,40 +80,18 @@ router.post(
         return res.status(404).json({ error: 'Destination account not found for provided IBAN' });
       }
 
-<<<<<<< HEAD
-      const newBalance = parseFloat(account.balance) + parseFloat(amount);
-      await Account.updateBalance(account.id, newBalance);
-
-      const transaction = await Transaction.create(
-        null,
-        account.id,
-        amount,
-        'external_incoming',
-        'completed',
-        {
-=======
       const result = await executeWitnessedTransaction({
         toAccountId: account.id,
         amount,
         type: 'external_incoming',
         options: {
->>>>>>> firewallcrew-publish
           external_from_name: sender_name,
           external_from_iban: iban,
           reference
         }
-<<<<<<< HEAD
-      );
-
-      res.status(201).json({
-        message: 'Incoming payment recorded',
-        transaction,
-        new_balance: newBalance
-=======
       });
       return sendTransactionResult(res, result, 'Incoming payment recorded', {
         new_balance: result.toBalance
->>>>>>> firewallcrew-publish
       });
     } catch (error) {
       next(error);
@@ -127,9 +99,7 @@ router.post(
   }
 );
 
-<<<<<<< HEAD
-=======
-router.get('/witness-reconcile', async (req, res, next) => {
+router.get('/witness-reconcile', requireWitnessReconcileAuth, async (req, res, next) => {
   try {
     const rawIds = req.query.transaction_ids;
     if (typeof rawIds !== 'string') {
@@ -163,7 +133,6 @@ router.get('/witness-reconcile', async (req, res, next) => {
   }
 });
 
->>>>>>> firewallcrew-publish
 router.use(authenticateToken);
 
 /**
@@ -206,13 +175,24 @@ router.use(authenticateToken);
  */
 router.get('/', async (req, res, next) => {
   try {
-    const { type, startDate, endDate, page = 1, limit = 20 } = req.query;
+    const { type, startDate, endDate } = req.query;
+    // Bounded pagination: an unbounded or non-numeric limit could dump or stall the whole table.
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
+    if (type !== undefined && !TRANSACTION_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'Invalid transaction type filter' });
+    }
+    const parsedStart = startDate ? new Date(startDate) : null;
+    const parsedEnd = endDate ? new Date(endDate) : null;
+    if ((parsedStart && Number.isNaN(parsedStart.getTime())) || (parsedEnd && Number.isNaN(parsedEnd.getTime()))) {
+      return res.status(400).json({ error: 'startDate and endDate must be valid dates' });
+    }
     const filters = {
       type,
-      startDate: startDate ? new Date(startDate) : null,
-      endDate: endDate ? new Date(endDate) : null,
-      offset: (parseInt(page) - 1) * parseInt(limit),
-      limit: parseInt(limit)
+      startDate: parsedStart,
+      endDate: parsedEnd,
+      offset: (page - 1) * limit,
+      limit
     };
 
     const transactions = await Transaction.findByUserId(req.user.id, filters);
@@ -221,10 +201,10 @@ router.get('/', async (req, res, next) => {
     res.json({
       transactions,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total,
-        pages: Math.ceil(total / parseInt(limit))
+        pages: Math.ceil(total / limit)
       }
     });
   } catch (error) {
@@ -257,11 +237,8 @@ router.get('/', async (req, res, next) => {
  *     responses:
  *       201:
  *         description: Deposit successful
-<<<<<<< HEAD
-=======
  *       202:
  *         description: Deposit recorded locally; witness confirmation is pending
->>>>>>> firewallcrew-publish
  */
 router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
   try {
@@ -271,28 +248,6 @@ router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
       return res.status(400).json({ error: 'Account ID is required' });
     }
 
-<<<<<<< HEAD
-    const account = await Account.findById(parseInt(account_id));
-    if (!account) {
-      return res.status(404).json({ error: 'Account not found' });
-    }
-
-    if (parseInt(account.user_id) !== parseInt(req.user.id)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    const newBalance = parseFloat(account.balance) + parseFloat(amount);
-    await Account.updateBalance(account_id, newBalance);
-
-    const transaction = await Transaction.create(null, account_id, amount, 'deposit', 'completed', {
-      external_from_name: 'CASH IN'
-    });
-
-    res.status(201).json({
-      message: 'Deposit successful',
-      transaction,
-      new_balance: newBalance
-=======
     const result = await executeWitnessedTransaction({
       toAccountId: account_id,
       amount,
@@ -302,7 +257,6 @@ router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
     });
     return sendTransactionResult(res, result, 'Deposit successful', {
       new_balance: result.toBalance
->>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);
@@ -334,11 +288,8 @@ router.post('/deposit', depositWithdrawValidation, async (req, res, next) => {
  *     responses:
  *       201:
  *         description: Withdrawal successful
-<<<<<<< HEAD
-=======
  *       202:
  *         description: Withdrawal recorded locally; witness confirmation is pending
->>>>>>> firewallcrew-publish
  *       400:
  *         description: Insufficient funds
  */
@@ -350,35 +301,6 @@ router.post('/withdraw', depositWithdrawValidation, async (req, res, next) => {
       return res.status(400).json({ error: 'Account ID is required' });
     }
 
-<<<<<<< HEAD
-    const account = await Account.findById(parseInt(account_id));
-    if (!account) {
-      return res.status(404).json({ error: 'Account not found' });
-    }
-
-    if (parseInt(account.user_id) !== parseInt(req.user.id)) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-
-    const currentBalance = parseFloat(account.balance);
-    const withdrawalAmount = parseFloat(amount);
-
-    if (currentBalance < withdrawalAmount) {
-      return res.status(400).json({ error: 'Insufficient funds' });
-    }
-
-    const newBalance = currentBalance - withdrawalAmount;
-    await Account.updateBalance(account_id, newBalance);
-
-    const transaction = await Transaction.create(account_id, null, amount, 'withdrawal', 'completed', {
-      external_to_name: 'CASH OUT'
-    });
-
-    res.status(201).json({
-      message: 'Withdrawal successful',
-      transaction,
-      new_balance: newBalance
-=======
     const result = await executeWitnessedTransaction({
       fromAccountId: account_id,
       amount,
@@ -388,7 +310,6 @@ router.post('/withdraw', depositWithdrawValidation, async (req, res, next) => {
     });
     return sendTransactionResult(res, result, 'Withdrawal successful', {
       new_balance: result.fromBalance
->>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);
@@ -429,65 +350,26 @@ router.post('/withdraw', depositWithdrawValidation, async (req, res, next) => {
  *     responses:
  *       201:
  *         description: External payment initiated
-<<<<<<< HEAD
-=======
  *       202:
  *         description: Payment recorded locally; witness confirmation is pending
->>>>>>> firewallcrew-publish
  */
 router.post('/external/outgoing', externalOutgoingValidation, async (req, res, next) => {
   try {
     const { from_account_id, recipient_name, recipient_iban, amount, reference } = req.body;
 
-<<<<<<< HEAD
-    const account = await Account.findById(from_account_id);
-    if (!account || account.user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Source account not found or inaccessible' });
-    }
-
-    const paymentAmount = parseFloat(amount);
-    if (paymentAmount <= 0) {
-      return res.status(400).json({ error: 'Amount must be positive' });
-    }
-
-    if (parseFloat(account.balance) < paymentAmount) {
-      return res.status(400).json({ error: 'Insufficient funds' });
-    }
-
-    const newBalance = parseFloat(account.balance) - paymentAmount;
-    await Account.updateBalance(account.id, newBalance);
-
-    const transaction = await Transaction.create(
-      account.id,
-      null,
-      paymentAmount,
-      'external_outgoing',
-      'completed',
-      {
-=======
     const result = await executeWitnessedTransaction({
       fromAccountId: from_account_id,
       amount,
       type: 'external_outgoing',
       ownerUserId: req.user.id,
       options: {
->>>>>>> firewallcrew-publish
         external_to_name: recipient_name,
         external_to_iban: recipient_iban,
         reference
       }
-<<<<<<< HEAD
-    );
-
-    res.status(201).json({
-      message: 'Payment sent successfully',
-      transaction,
-      new_balance: newBalance
-=======
     });
     return sendTransactionResult(res, result, 'Payment sent successfully', {
       new_balance: result.fromBalance
->>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);
@@ -522,11 +404,8 @@ router.post('/external/outgoing', externalOutgoingValidation, async (req, res, n
  *     responses:
  *       201:
  *         description: Transfer successful
-<<<<<<< HEAD
-=======
  *       202:
  *         description: Transfer recorded locally; witness confirmation is pending
->>>>>>> firewallcrew-publish
  *       400:
  *         description: Insufficient funds or invalid accounts
  */
@@ -534,43 +413,6 @@ router.post('/transfer', transferValidation, async (req, res, next) => {
   try {
     const { from_account_id, to_account_id, amount } = req.body;
 
-<<<<<<< HEAD
-    if (from_account_id === to_account_id) {
-      return res.status(400).json({ error: 'Cannot transfer to the same account' });
-    }
-
-    const fromAccount = await Account.findById(from_account_id);
-    const toAccount = await Account.findById(to_account_id);
-
-    if (!fromAccount || !toAccount) {
-      return res.status(404).json({ error: 'One or both accounts not found' });
-    }
-
-    if (fromAccount.user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Access denied to source account' });
-    }
-
-    const currentBalance = parseFloat(fromAccount.balance);
-    const transferAmount = parseFloat(amount);
-
-    if (currentBalance < transferAmount) {
-      return res.status(400).json({ error: 'Insufficient funds' });
-    }
-
-    const fromNewBalance = currentBalance - transferAmount;
-    const toNewBalance = parseFloat(toAccount.balance) + transferAmount;
-
-    await Account.updateBalance(from_account_id, fromNewBalance);
-    await Account.updateBalance(to_account_id, toNewBalance);
-
-    const transaction = await Transaction.create(from_account_id, to_account_id, amount, 'transfer');
-
-    res.status(201).json({
-      message: 'Transfer successful',
-      transaction,
-      from_account_balance: fromNewBalance,
-      to_account_balance: toNewBalance
-=======
     if (Number(from_account_id) === Number(to_account_id)) {
       return res.status(400).json({ error: 'Cannot transfer to the same account' });
     }
@@ -585,7 +427,6 @@ router.post('/transfer', transferValidation, async (req, res, next) => {
     return sendTransactionResult(res, result, 'Transfer successful', {
       from_account_balance: result.fromBalance,
       to_account_balance: result.toBalance
->>>>>>> firewallcrew-publish
     });
   } catch (error) {
     next(error);

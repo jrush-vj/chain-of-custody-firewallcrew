@@ -1,4 +1,27 @@
-# Automatic deployment on ct105-ai
+# Current setup: Ubuntu bank server + laptop witness (LAN)
+
+The bank and the Layer 1/2/3 monitor run on the Ubuntu server (192.168.31.77). The witness runs on the
+Windows laptop. Everything travels over plain HTTP on the LAN (`WITNESS_ALLOW_LAN_HTTP=1`, private IPs only).
+The ct105/Oracle/Cloudflare sections below are kept for history.
+
+One-time, from the laptop's Git Bash (the server must be able to clone `main`, so push first):
+
+```bash
+bash deploy/server/setup.sh <ssh-user>@192.168.31.77 <laptop-lan-ip>
+```
+
+Then run the three PowerShell lines it prints (firewall rule, start-at-logon task). Bank:
+`http://192.168.31.77:3001`, witness dashboard: `http://localhost:8787`.
+
+- Witness changes: save the file; `witness/run-witness.ps1` restarts it (`node --watch`).
+- Bank or agent changes: push to `main`. Within 2 minutes the server rebuilds on `banking-system/`
+  changes and restarts `coc-layer1-monitor` on `deploy/ct105/` changes.
+- Status/demo: `ssh -t <user>@192.168.31.77 sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh status`
+  (also `attack 1|2|3`, `restore`, `logs`).
+- Laptop IP changed? Re-run `setup.sh` with the new IP. Keep the laptop awake: with the witness down,
+  transactions are refused.
+
+# (Old) Automatic deployment on ct105-ai
 
 This repository is the source of truth. A systemd timer on ct105-ai fetches
 `main` every two minutes and rebuilds the banking stack only when files under
@@ -26,14 +49,6 @@ sudo chmod 600 .env
 ```
 
 Set unique strong values for `DB_PASSWORD`, `JWT_SECRET`,
-<<<<<<< HEAD
-`DATA_ENCRYPTION_KEY`, and `EXTERNAL_PAYMENTS_API_KEY`. Do not use sample
-values, and do not put `.env` in Git. `DATA_ENCRYPTION_KEY` must be at least 32
-characters.
-If the repository is private, configure a read-only GitHub deploy key for the
-clone/service account before installing the polling timer.
-
-=======
 `DATA_ENCRYPTION_KEY`, `EXTERNAL_PAYMENTS_API_KEY`, and `WITNESS_HMAC_SECRET`.
 Do not use sample values, and do not put `.env` in Git.
 `DATA_ENCRYPTION_KEY` and `WITNESS_HMAC_SECRET` must each be at least 32
@@ -48,7 +63,6 @@ Oracle witness first. Do not deploy the banking witness integration until
 `https://witness.jrushvj.dev/health` succeeds from ct105 and all three
 `WITNESS_*` values are set in `.env`.
 
->>>>>>> firewallcrew-publish
 Validate and initially start the application:
 
 ```bash
@@ -82,8 +96,6 @@ fast-forward updates. Failed builds/health checks leave the commit marked
 undeployed, so a later timer run retries. Check status and logs before pushing
 another release.
 
-<<<<<<< HEAD
-=======
 ## Applying a repository release on ct105
 
 For a dashboard-only Oracle release, ct105 only needs the new root commit and
@@ -122,7 +134,6 @@ API returns HTTP 202 with `witness_status: "pending"` and retries finalization
 from the PostgreSQL outbox. Do not resubmit a transaction with a pending or
 uncertain response until you have checked transaction history.
 
->>>>>>> firewallcrew-publish
 After editing and testing locally, push to the repository's `main` branch.
 Within two minutes, ct105 fetches the commit, builds changed banking services,
 restarts the Compose stack, and verifies both local health endpoints. Follow
@@ -138,3 +149,40 @@ sudo docker compose -f /opt/chain-of-custody/banking-system/docker-compose.yml p
 Revert the faulty source change and push the revert to `main`. The polling
 deployment then fast-forwards and redeploys that version. Do not reset the
 server checkout or edit its tracked files by hand.
+
+## Day-to-day operations with `coc.sh`
+
+`deploy/ct105/coc.sh` wraps the common `docker cp` / compose / demo commands:
+
+```bash
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh status            # containers, health, witness, layer services
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh hotpatch backend  # docker cp backend source, restart, health-check
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh hotpatch frontend # build bundle, docker cp into nginx, reload
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh rollback backend  # undo the last backend hotpatch
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh attack 2          # run the Layer 2 demo (1, 2 or 3)
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh restore           # Layers 1-3 back to normal
+sudo bash /opt/chain-of-custody/deploy/ct105/coc.sh logs backend
+```
+
+A hotpatch syntax-checks the files first, saves the container's current copy
+to `/var/tmp/coc-hotpatch/`, and rolls back automatically if the health check
+fails. It does not change the image: the next automatic deploy or
+`coc.sh rebuild` replaces it with what is in Git, so commit anything you keep.
+Changes to `package.json` always need `coc.sh rebuild backend`.
+
+## Security settings (`banking-system/.env`)
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WITNESS_RECONCILE_AUTH` | empty (open) | `required` rejects unsigned `/api/transactions/witness-reconcile` reads |
+| `ENABLE_API_DOCS` | `false` | Swagger UI at `/api-docs` in production |
+| `ENABLE_PAYMENT_PORTAL` | `false` | Tokenless `/send-payment` portal in production (it credits any IBAN without login) |
+
+Turn on reconciliation auth in this order so Layer 2 never goes dark:
+
+1. Deploy the witness release that signs bank reads (`bash deploy/coc-sync.sh <repo> witness` on Oracle).
+2. Set `WITNESS_RECONCILE_AUTH=required` in ct105's `banking-system/.env`.
+3. `sudo bash deploy/ct105/coc.sh rebuild backend`, then confirm the auditor's Layer 2 card stays green.
+
+Session tokens are now typed: users signed in before this release are asked to
+sign in again once.

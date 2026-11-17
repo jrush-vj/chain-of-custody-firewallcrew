@@ -1,14 +1,12 @@
 .payments-page {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1.5rem;
   max-width: 840px;
   margin: 0 auto;
+  width: 100%;
 }
 
 .payments-page .form-card {
   width: 100%;
+  max-width: none;
   background: var(--card-bg);
   border-radius: 24px;
   padding: 2rem;
@@ -16,47 +14,48 @@
   box-shadow: 0 30px 60px rgba(5, 8, 18, 0.45);
 }
 
+.payments-page .form-card form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1.25rem;
+}
+
 .payments-page .form-group {
-  margin-bottom: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.payments-page .form-group.full,
+.payments-page .btn-primary.full {
+  grid-column: 1 / -1;
 }
 
 .payments-page label {
-  display: block;
   font-weight: 600;
-  margin-bottom: 0.5rem;
   color: rgba(255, 255, 255, 0.8);
-}
-
-.payments-page input,
-.payments-page .form-card form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1.25rem;
 }
 
 .payments-page input,
 .payments-page select,
 .payments-page textarea {
+  width: 100%;
   padding: 0.85rem 1rem;
-  border-radius: 14px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--radius-field);
+  border: 1px solid var(--field-border);
+  background: var(--field-bg);
   color: #fff;
   font-size: 1rem;
 }
 
-.payments-page select {
-  appearance: none;
-  -webkit-appearance: none;
+.payments-page input[aria-invalid='true'] {
+  border-color: rgba(255, 139, 167, 0.6);
 }
 
-.payments-page textarea {
-  min-height: 100px;
-  resize: vertical;
+.payments-page small {
+  font-size: 0.85rem;
 }
 
-.payments-page select option,
-.payments-page select optgroup {
-  background: rgba(4, 8, 18, 0.95);
-  color: #fff;
+.payments-page .field-error {
+  color: var(--danger);
 }

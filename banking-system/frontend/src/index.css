@@ -3,11 +3,18 @@
   color-scheme: dark;
   --bg-gradient: radial-gradient(circle at 20% 20%, #0f1b3d, #050812 55%);
   --card-bg: rgba(9, 14, 30, 0.85);
-  --card-border: rgba(255, 255, 255, 0.05);
+  --card-border: rgba(255, 255, 255, 0.06);
   --text: #f7f8fd;
   --text-muted: rgba(247, 248, 253, 0.6);
   --accent: #5ad8ff;
   --accent-strong: #5ad3a2;
+  --success: #7ff2cb;
+  --warning: #ffcf7a;
+  --danger: #ff8ba7;
+  --field-bg: rgba(255, 255, 255, 0.04);
+  --field-border: rgba(255, 255, 255, 0.14);
+  --radius-field: 14px;
+  --focus-ring: 0 0 0 3px rgba(90, 216, 255, 0.35);
 }
 
 * {
@@ -19,6 +26,7 @@
 body {
   min-height: 100vh;
   background: var(--bg-gradient);
+  background-attachment: fixed;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -33,4 +41,95 @@ input,
 select,
 textarea {
   font: inherit;
+}
+
+/* Visible keyboard focus everywhere, without showing rings on mouse clicks. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+input,
+select,
+textarea {
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: rgba(90, 216, 255, 0.6) !important;
+  background: rgba(90, 216, 255, 0.05) !important;
+  box-shadow: var(--focus-ring);
+}
+
+select option {
+  background: #0b1320;
+  color: var(--text);
+}
+
+/* Shared primary button (used by every page, not only auth). */
+.btn-primary {
+  background: linear-gradient(120deg, #5ad3a2, #5ad8ff);
+  color: #051023;
+  border: none;
+  border-radius: 14px;
+  padding: 0.85rem 1.4rem;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s, opacity 0.2s;
+}
+
+.btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 15px 35px rgba(90, 216, 255, 0.3);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.mono {
+  font-family: 'JetBrains Mono', 'Cascadia Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  letter-spacing: 0.02em;
+}
+
+.amount-in {
+  color: var(--success);
+}
+
+.amount-out {
+  color: var(--danger);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
