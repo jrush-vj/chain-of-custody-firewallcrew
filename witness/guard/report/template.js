@@ -19,7 +19,7 @@ const OPEN_ITEMS = Object.freeze({
   UNSTABLE: 'The link is flapping; a human must clear it before any automatic action resumes.'
 });
 
-export const buildReport = ({ incident, records, config, now = new Date() }) => {
+export const buildReport = ({ incident, records, config, now = new Date(), narrative: given = null }) => {
   const opened = incident.opened_at;
   const inWindow = (record) => {
     const at = Date.parse(record.recorded_at) / 1000;
@@ -54,10 +54,10 @@ export const buildReport = ({ incident, records, config, now = new Date() }) => 
     verdict.seq !== null && verdict.seq !== undefined ? `The first disagreeing record is ledger entry ${verdict.seq}.` : null
   ].filter(Boolean);
 
-  const narrative = config.reportNarrative === 'off'
+  // The narrative is optional and always labelled; the template above stands without it.
+  const narrative = given || (config.reportNarrative === 'off'
     ? { mode: 'off', status: 'not requested', text: null }
-    // Bob is wired in a later phase; until then every Bob mode degrades to the template.
-    : { mode: config.reportNarrative, status: 'unavailable', text: null };
+    : { mode: config.reportNarrative, status: 'not requested', text: null });
 
   const report = {
     version: 1,

@@ -11,6 +11,7 @@ import { authenticateApprover, parseApprovers } from './approvals.js';
 import { loadGuardConfig } from './config.js';
 import { buildReport } from './report/template.js';
 import { verifyReport } from './report/verify.js';
+import { createBobAdapter } from './bob/adapter.js';
 
 // Open Layer 2 findings the witness itself established by comparing its own copy.
 const TAMPER_KIND = { record_mismatch: 'changed', entry_edited: 'changed', entry_deleted: 'missing', db_edited_without_log: 'unwitnessed' };
@@ -23,7 +24,7 @@ const DECISION_SUMMARY = Object.freeze({
   UNSTABLE: 'guard: link flapping; human needed'
 });
 
-export const createGuard = (store, config = loadGuardConfig()) => {
+export const createGuard = (store, config = loadGuardConfig(), { bob: bobOverride, bobRun, bobEnv } = {}) => {
   const approvers = parseApprovers(config.approversRaw);
   const tracker = { silent: false, outages: [], atStart: null, reconnectAt: null, reconnect: null };
   let pendingOrder = null; // the quarantine the box has not yet picked up
@@ -55,12 +56,33 @@ export const createGuard = (store, config = loadGuardConfig()) => {
     }
   });
 
+  // Bob's side effects on the ledger: a tool-call attempt is a tamper event; instruction-like input is a warning.
+  const bobEvent = (event) => {
+    const entry = event.type === 'tool_attempt'
+      ? { trigger: 'guard:bob_tool_attempt', state: 'alert', summary: 'guard: Bob tried to call a tool (it has none; blocked)', detail: { tools: event.tools.join(','), count: String(event.count) } }
+      : { trigger: 'guard:provenance_warning', state: 'normal', summary: 'guard: instruction-like text withheld from Bob', detail: { ref: event.ref, field: event.field, rule: event.rule, rules: (event.rules || [event.rule]).join(','), chars: String(event.chars) } };
+    store.recordLayerEvent({ layer: 3, ...entry, who: {} }).catch((error) => console.error('guard: could not record Bob event:', error.message));
+  };
+  // bobRun / bobEnv let tests script Bob; in production both are undefined and the real CLI runner is used.
+  const bob = bobOverride || createBobAdapter({ config, run: bobRun, env: bobEnv || process.env, onEvent: bobEvent });
+
   // Build a report from the witness's own ledger and store it in that ledger (so it is tamper-evident too).
-  async function generateReport(incidentId) {
+  // With narrate=true (or REPORT_NARRATIVE=bob_auto for a concluded incident) Bob adds a labelled note; if
+  // Bob is off, keyless, fails validation or tries a tool, the template stands alone and says why.
+  async function generateReport(incidentId, { narrate = false } = {}) {
     const incident = machine.get(incidentId);
     if (!incident) return null;
     await store.enqueue(async () => {}); // let queued transition entries reach the ledger first
-    const report = buildReport({ incident, records: store.records, config });
+    let report = buildReport({ incident, records: store.records, config });
+    const mode = config.reportNarrative;
+    if (mode !== 'off' && (narrate || mode === 'bob_auto')) {
+      const result = await bob.narrate({ report, records: store.records });
+      await store.enqueue(async () => {}); // Bob's own ledger events first
+      const narrative = result.status === 'ok'
+        ? { mode, status: 'ok', source: 'IBM Bob (AI-written; not verified)', text: result.value.summary, points: result.value.points, confidence: result.value.confidence }
+        : { mode, status: result.status, reason: result.reason, text: null };
+      report = buildReport({ incident, records: store.records, config, narrative });
+    }
     await store.recordLayerEvent({
       layer: 3, trigger: 'guard:report', state: 'normal', summary: 'guard: incident report recorded',
       detail: { report_id: report.report_id, incident: incident.id, sha256: report.sha256, body: JSON.stringify(report) },

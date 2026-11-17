@@ -607,6 +607,17 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
         if (result.status === 409) return sendJson(response, 409, { error: 'Report failed verification against the ledger', problems: result.problems });
         return sendJson(response, 200, result.report);
       }
+      const makeNarrative = guard && request.method === 'POST' ? /^\/guard\/incidents\/([A-Za-z0-9_-]{1,64})\/narrative$/.exec(pathname) : null;
+      if (makeNarrative) {
+        await readBody(request);
+        if (!guard.authenticate(request.headers)) {
+          return sendJson(response, guard.approversConfigured ? 401 : 403, { error: 'Approver authentication required' });
+        }
+        if (!guard.config.bobAllowed) return sendJson(response, 403, { error: 'Bob is disabled on this witness', bob: 'disabled' });
+        if (guard.config.reportNarrative === 'off') return sendJson(response, 403, { error: 'Report narrative is off (REPORT_NARRATIVE)' });
+        const report = await guard.generateReport(makeNarrative[1], { narrate: true });
+        return report ? sendJson(response, 201, { report_id: report.report_id, narrative: report.narrative.status }) : sendJson(response, 404, { error: 'No such incident' });
+      }
       const makeReport = guard && request.method === 'POST' ? /^\/guard\/incidents\/([A-Za-z0-9_-]{1,64})\/report$/.exec(pathname) : null;
       if (makeReport) {
         await readBody(request);

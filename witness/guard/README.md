@@ -70,3 +70,26 @@ node witness/guard/report/verify-cli.js /var/lib/banking-witness/ledger.jsonl re
 "Diagnose with Bob" request is refused (HTTP 403) and `GET /guard/state` reports `bob_enabled: false`.
 With the guard off, behaviour is as before unless `BOB_ENABLED=0`. The classifier, containment and
 approvals never depend on Bob.
+
+### Bob guardrails (`guard/bob/`)
+
+Bob only ever writes a labelled note for a human. It cannot approve, seal, quarantine or patch anything.
+
+- **No tools.** Launched with every tool group disabled (`read, edit, execute, browser, mcp, skill, todo,
+  artifact, subtask, subagent, mode`), no MCP, no subagents, command security on, in an empty throwaway
+  workspace, with only `BOB_API_KEY` in its environment and no shell. The CLI silently ignores an unknown
+  group name, so a test pins the exact list.
+- **Any tool-call attempt is a tamper event.** The stream output shows every `tool_use`; one is written to
+  the ledger as `guard:bob_tool_attempt` (an alert) and Bob's whole answer is discarded.
+- **Input is data, not instructions.** Attacker-controlled strings are pre-scanned. Instruction-like text is
+  withheld (only its length and hash go in) and logged as `guard:provenance_warning` with the rules that hit,
+  never the text. What remains is passed as one line of quoted JSON.
+- **Output is validated.** Exact JSON shape, length limits, no links or markup, every number must appear in
+  the evidence, the per-run canary must not be echoed, and attacker text must not be repeated. Any failure
+  falls back to the template and the report says why (`narrative.status`).
+- **Switches.** `BOB_ENABLED` (master), `REPORT_NARRATIVE` (`off`, `bob_on_demand`, `bob_auto`). On request:
+  `POST /guard/incidents/<id>/narrative` (approver token).
+
+What this does not give you: the network. Run the witness host with an egress allowlist so Bob's process can
+reach only IBM's API; this code cannot enforce that for you. Live behaviour against the real Bob service
+(that the tool-group flags really remove every tool) is verified only with a key; see the checkpoint notes.
