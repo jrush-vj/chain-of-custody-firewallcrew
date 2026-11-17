@@ -9,6 +9,8 @@ import { classify } from './classify.js';
 import { ContainmentMachine, STATES } from './containment.js';
 import { authenticateApprover, parseApprovers } from './approvals.js';
 import { loadGuardConfig } from './config.js';
+import { buildReport } from './report/template.js';
+import { verifyReport } from './report/verify.js';
 
 // Open Layer 2 findings the witness itself established by comparing its own copy.
 const TAMPER_KIND = { record_mismatch: 'changed', entry_edited: 'changed', entry_deleted: 'missing', db_edited_without_log: 'unwitnessed' };
@@ -41,11 +43,48 @@ export const createGuard = (store, config = loadGuardConfig()) => {
 
   const machine = new ContainmentMachine({
     config,
-    onTransition: (transition) => { record(transition); },
+    onTransition: (transition) => {
+      record(transition);
+      // An incident that concluded gets its report automatically; the others are on request.
+      if (transition.to === STATES.QUARANTINED || transition.to === STATES.RESUMED) {
+        generateReport(transition.id).catch((error) => console.error('guard: could not record report:', error.message));
+      }
+    },
     onQuarantine: (incident) => {
       pendingOrder = { id: incident.id, action: 'quarantine', reason: `guard: ${incident.class.toLowerCase().replace(/_/g, ' ')}` };
     }
   });
+
+  // Build a report from the witness's own ledger and store it in that ledger (so it is tamper-evident too).
+  async function generateReport(incidentId) {
+    const incident = machine.get(incidentId);
+    if (!incident) return null;
+    await store.enqueue(async () => {}); // let queued transition entries reach the ledger first
+    const report = buildReport({ incident, records: store.records, config });
+    await store.recordLayerEvent({
+      layer: 3, trigger: 'guard:report', state: 'normal', summary: 'guard: incident report recorded',
+      detail: { report_id: report.report_id, incident: incident.id, sha256: report.sha256, body: JSON.stringify(report) },
+      who: {}
+    });
+    return report;
+  }
+
+  const storedReports = () => store.records
+    .filter((record) => record.action === 'layer_event' && record.payload.trigger === 'guard:report')
+    .map((record) => { try { return JSON.parse(record.payload.detail.body); } catch { return null; } })
+    .filter(Boolean);
+
+  // A report is only ever returned if it verifies against the ledger as it is now.
+  const listReports = () => storedReports().map((report) => ({
+    report_id: report.report_id, incident: report.incident.id, generated_at: report.generated_at,
+    verified: verifyReport(report, store.records).ok
+  }));
+  const getReport = (id) => {
+    const report = storedReports().find((item) => item.report_id === id);
+    if (!report) return { status: 404 };
+    const result = verifyReport(report, store.records);
+    return result.ok ? { status: 200, report } : { status: 409, problems: result.problems };
+  };
 
   const bankCount = () => (store.bankView ? store.bankView.count : 0);
 
@@ -113,6 +152,9 @@ export const createGuard = (store, config = loadGuardConfig()) => {
     machine,
     tick,
     decide,
+    generateReport,
+    listReports,
+    getReport,
     authenticate: (headers) => authenticateApprover(headers, approvers),
     approversConfigured: approvers.length > 0,
     // What the box asks for with a signed GET. Returns the order once per incident until the box acts.
@@ -120,7 +162,8 @@ export const createGuard = (store, config = loadGuardConfig()) => {
     acknowledge: (id) => { if (pendingOrder && pendingOrder.id === id) pendingOrder = null; },
     state: () => ({
       enabled: true,
-      bob_enabled: config.bobEnabled,
+      bob_enabled: config.bobAllowed,
+      report_narrative: config.reportNarrative,
       approvals: approvers.length > 0 ? 'configured' : 'no approvers configured (approvals refused)',
       incidents: machine.snapshot()
     })

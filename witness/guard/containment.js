@@ -24,13 +24,19 @@ export class GuardNotFound extends Error {
 const MAX_EXTENSIONS = 3;
 const OPEN = new Set([STATES.SEALED, STATES.PENDING, STATES.UNSTABLE]);
 // Fixed, attacker-proof wording for each reason; no input text is ever copied in.
-const REASON = Object.freeze({
+export const REASON = Object.freeze({
   TAMPER_CONFIRMED: 'the witness copy disagrees with the box',
   SITE_OUTAGE: 'several boxes at the site went silent together',
   PROBE_FAIL: 'the witness cannot reach the site gateway',
   UNVERIFIED: 'the box is silent and has not reconnected',
   UNSTABLE: 'the link keeps dropping',
   CHALLENGE_FAIL: 'challenge-response failed'
+});
+
+// What the report needs to explain a verdict: enumerated values only (the classifier guarantees that).
+const summarize = (verdict) => verdict && ({
+  class: verdict.class, reasons: [...verdict.reasons], evidence: verdict.evidence.map((item) => ({ ...item })),
+  seq: verdict.seq ?? null, flags: [...(verdict.flags || [])]
 });
 
 export class ContainmentMachine {
@@ -54,11 +60,12 @@ export class ContainmentMachine {
     return incident;
   }
 
-  open(cls, state, now, deadline, defaultAction, why) {
+  open(cls, state, now, deadline, defaultAction, why, verdict) {
     this.counter += 1;
     const incident = {
       id: `g-${Math.floor(now)}-${this.counter}`, class: cls, state: null, opened_at: now, updated_at: now,
-      deadline, default_action: defaultAction, extensions: 0, auto_quarantine: defaultAction === 'quarantine'
+      deadline, default_action: defaultAction, extensions: 0, auto_quarantine: defaultAction === 'quarantine',
+      verdict: summarize(verdict)
     };
     this.incidents.set(incident.id, incident);
     return this.move(incident, state, now, why);
@@ -77,9 +84,10 @@ export class ContainmentMachine {
       if (live && (live.state === STATES.PENDING || live.state === STATES.SEALED || live.state === STATES.UNSTABLE)) {
         // Upgrade an ambiguous or sealed incident: tamper evidence is the stronger fact.
         live.class = cls; live.deadline = deadline; live.default_action = 'quarantine'; live.auto_quarantine = true;
+        live.verdict = summarize(verdict);
         return this.move(live, STATES.PENDING, now, reason);
       }
-      return this.open(cls, STATES.PENDING, now, deadline, 'quarantine', reason);
+      return this.open(cls, STATES.PENDING, now, deadline, 'quarantine', reason, verdict);
     }
 
     if (cls === CLASSES.NETWORK_CONSISTENT) {
@@ -96,17 +104,17 @@ export class ContainmentMachine {
         live.auto_quarantine = false; // flapping stops anything automatic
         return this.move(live, STATES.UNSTABLE, now, reason);
       }
-      return this.open(cls, STATES.UNSTABLE, now, null, 'none', reason);
+      return this.open(cls, STATES.UNSTABLE, now, null, 'none', reason, verdict);
     }
 
     if (cls === CLASSES.SITE_OUTAGE || cls === CLASSES.PROBE_FAIL) {
       if (live) return live;
-      return this.open(cls, STATES.PENDING, now, now + this.config.ambiguousTimeoutS, 'stay_sealed', reason);
+      return this.open(cls, STATES.PENDING, now, now + this.config.ambiguousTimeoutS, 'stay_sealed', reason, verdict);
     }
 
     if (cls === CLASSES.UNVERIFIED) {
       if (live) return live;
-      return this.open(cls, STATES.SEALED, now, null, 'none', reason);
+      return this.open(cls, STATES.SEALED, now, null, 'none', reason, verdict);
     }
 
     // BOX_CLAIM_ONLY, CHALLENGE_FAIL, NONE: alert only, never containment.
@@ -155,6 +163,10 @@ export class ContainmentMachine {
       incident.released = true;
       this.move(incident, STATES.RESUMED, now, 'quarantine released by the existing key-holder approval');
     }
+  }
+
+  get(id) {
+    return this.incidents.get(id) || null;
   }
 
   snapshot() {

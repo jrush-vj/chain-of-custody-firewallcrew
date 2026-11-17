@@ -37,6 +37,9 @@ export const loadGuardConfig = (env = process.env) => {
     bobEnabled: env.BOB_ENABLED === '1',
     reportNarrative: choice(env, 'REPORT_NARRATIVE', 'off', REPORT_NARRATIVE_MODES)
   };
+  // Master switch for every Bob feature, including the existing "Diagnose with Bob" button.
+  // Guard on: Bob is allowed only if BOB_ENABLED=1. Guard off: legacy behaviour (allowed) unless BOB_ENABLED=0.
+  config.bobAllowed = config.guardEnabled ? config.bobEnabled : env.BOB_ENABLED !== '0';
   // A narrative mode without Bob enabled is a configuration contradiction: fail safe to the template.
   if (!config.bobEnabled) config.reportNarrative = 'off';
   return Object.freeze(config);

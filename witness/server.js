@@ -543,6 +543,8 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
       // signed request. These use authorize(), not authorizeContact(): Bob polling is not ct105 contact.
       if (request.method === 'POST' && pathname === '/v1/diagnose-request') {
         await readBody(request);
+        // Master switch: with Bob off, the button does nothing and no paid run is ever queued.
+        if (!guardConfig.bobAllowed) return sendJson(response, 403, { error: 'Bob is disabled on this witness', bob: 'disabled' });
         // Each request starts a paid Bob run with root on the lab: only this dashboard may ask.
         const origin = request.headers.origin;
         if (origin && origin !== `http://${request.headers.host}` && origin !== `https://${request.headers.host}`) {
@@ -593,6 +595,26 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
       // Soft containment API (only when GUARD_ENABLED=1). Approvals need an approver token; no UI.
       if (guard && request.method === 'GET' && pathname === '/guard/state') {
         return sendJson(response, 200, guard.state());
+      }
+      if (guard && request.method === 'GET' && pathname === '/guard/reports') {
+        return sendJson(response, 200, { reports: guard.listReports() });
+      }
+      const reportRoute = guard && request.method === 'GET' ? /^\/guard\/reports\/([A-Za-z0-9_-]{1,96})$/.exec(pathname) : null;
+      if (reportRoute) {
+        const result = guard.getReport(reportRoute[1]);
+        if (result.status === 404) return sendJson(response, 404, { error: 'No such report' });
+        // A report that fails verification is never shown.
+        if (result.status === 409) return sendJson(response, 409, { error: 'Report failed verification against the ledger', problems: result.problems });
+        return sendJson(response, 200, result.report);
+      }
+      const makeReport = guard && request.method === 'POST' ? /^\/guard\/incidents\/([A-Za-z0-9_-]{1,64})\/report$/.exec(pathname) : null;
+      if (makeReport) {
+        await readBody(request);
+        if (!guard.authenticate(request.headers)) {
+          return sendJson(response, guard.approversConfigured ? 401 : 403, { error: 'Approver authentication required' });
+        }
+        const report = await guard.generateReport(makeReport[1]);
+        return report ? sendJson(response, 201, { report_id: report.report_id }) : sendJson(response, 404, { error: 'No such incident' });
       }
       if (guard && request.method === 'GET' && pathname === '/v1/guard-decision') {
         authorize(request, pathname, '');
