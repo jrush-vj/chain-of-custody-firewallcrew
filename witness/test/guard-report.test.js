@@ -31,7 +31,7 @@ const start = async (env = {}) => {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
-  const stop = async () => { server.close(); await rm(directory, { recursive: true, force: true }); };
+  const stop = async () => { server.close(); await store.enqueue(async () => {}); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); };
   return { store, guard, base, directory, stop };
 };
 

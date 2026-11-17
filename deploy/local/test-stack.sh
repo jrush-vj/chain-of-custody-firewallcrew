@@ -129,6 +129,7 @@ cmd_lab_up() {
     --network banking-system_app-network \
     -v "$repo:/opt/chain-of-custody" \
     -v /var/run/docker.sock:/var/run/docker.sock \
+    -e COC_GUARD="${COC_GUARD:-0}" \
     coc-lab /opt/chain-of-custody/deploy/local/lab/start.sh >/dev/null
   for _ in $(seq 1 30); do
     docker logs coc-lab 2>&1 | grep -q "heartbeat\|watching " && break

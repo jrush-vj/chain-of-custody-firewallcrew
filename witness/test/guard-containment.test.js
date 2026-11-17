@@ -190,7 +190,7 @@ const start = async (extraEnv = {}) => {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const base = `http://127.0.0.1:${server.address().port}`;
-  const stop = async () => { server.close(); await rm(directory, { recursive: true, force: true }); };
+  const stop = async () => { server.close(); await store.enqueue(async () => {}); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); };
   return { store, guard, base, stop };
 };
 
@@ -290,5 +290,35 @@ test('a root attacker cannot force a quarantine by posting fake evidence as the 
     await store.recordLayerEvent({ layer: 2, trigger: 'record_mismatch', kind: 'record_mismatch', state: 'alert', summary: 'real', detail: { record: 1 }, who: {} });
     guard.tick(Date.now());
     assert.equal(guard.machine.active().class, 'TAMPER_CONFIRMED');
+  } finally { await stop(); }
+});
+
+test('"Restore to normal" closes a quarantined incident, and the next attack opens a new one', async () => {
+  const { guard, store, stop } = await start();
+  try {
+    const mismatch = () => store.recordLayerEvent({ layer: 2, trigger: 'record_mismatch', kind: 'record_mismatch', state: 'alert', summary: 's', detail: { record: 4 }, who: {} });
+    await mismatch();
+    guard.tick(Date.now());
+    const first = guard.machine.active();
+    guard.decide(first.id, 'soc-lead', 'approve');
+    guard.tick(Date.now());
+    assert.equal(guard.machine.active().state, 'QUARANTINED');
+    // Before the box has reported its lock, the incident must stay quarantined.
+    guard.tick(Date.now() + 5000);
+    assert.equal(guard.machine.active().state, 'QUARANTINED', 'the order is not "released" before the box acted');
+    // The box carries out the quarantine and reports it.
+    await store.recordLayerEvent({ layer: 3, trigger: 'quarantine:locked', state: 'alert', summary: 'dry run', detail: { quarantine_id: 'q-1', dry_run: true }, who: {} });
+    guard.tick(Date.now() + 6000);
+    assert.equal(guard.machine.active().state, 'QUARANTINED', 'still locked');
+    // The dashboard's "Restore to normal" resolves everything.
+    await store.resolveLayerEvents('restore completed');
+    guard.tick(Date.now() + 7000);
+    assert.equal(guard.machine.active(), null, 'the incident is closed');
+    assert.equal(guard.machine.get(first.id).state, 'RESUMED');
+    // A second attack now opens a second incident instead of being swallowed.
+    await store.recordLayerEvent({ layer: 2, trigger: 'record_mismatch', kind: 'record_mismatch', state: 'alert', summary: 'again', detail: { record: 9 }, who: {} });
+    guard.tick(Date.now() + 8000);
+    const second = guard.machine.active();
+    assert.ok(second && second.id !== first.id && second.state === 'PENDING');
   } finally { await stop(); }
 });

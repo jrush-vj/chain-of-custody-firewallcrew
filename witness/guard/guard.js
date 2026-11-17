@@ -160,12 +160,18 @@ export const createGuard = (store, config = loadGuardConfig(), { bob: bobOverrid
     machine.handle(verdict, nowS);
     machine.tick(nowS);
     if (verdict.class === 'NETWORK_CONSISTENT') tracker.reconnect = null; // consumed
-    // The existing break-glass release closes a quarantined incident.
+    // A quarantined incident closes when the quarantine is lifted by any existing route: the key-holder release
+    // (quarantine:released) or "Restore to normal" (which resolves the box's quarantine:locked report). The box
+    // must have reported its lock first, so the order is not mistaken for released before the box has acted.
     const live = machine.active();
     if (live && live.state === STATES.QUARANTINED) {
-      const released = store.recentLayerEvents().some((item) => item.layer === 3 && item.trigger === 'quarantine:released' && item.id > (live.updated_at_seq || 0)
-        && Date.parse(item.recorded_at) / 1000 >= live.updated_at);
-      if (released) machine.release(live.id, nowS);
+      const since = live.updated_at - 1; // one second of slack for the clock
+      const events = store.recentLayerEvents().filter((item) => item.layer === 3 && Date.parse(item.recorded_at) / 1000 >= since);
+      const locks = events.filter((item) => item.trigger === 'quarantine:locked');
+      if (locks.length > 0) live.lock_seen = true;
+      const released = events.some((item) => item.trigger === 'quarantine:released');
+      const lifted = live.lock_seen && locks.every((item) => item.resolved);
+      if (released || lifted) machine.release(live.id, nowS);
     }
     return verdict;
   };

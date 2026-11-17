@@ -34,6 +34,10 @@ services:
       BANK_RECONCILE_URL: http://127.0.0.1:8080/api/transactions/witness-reconcile
       WITNESS_LAYER1_ENABLED: "1"
       WITNESS_UNWITNESSED_GRACE_S: "20"
+      # Guard (witness/guard): off unless these are set in the shell that runs test-stack.sh up.
+      GUARD_ENABLED: ${GUARD_ENABLED:-}
+      APPROVERS: ${APPROVERS:-}
+      BOB_ENABLED: ${BOB_ENABLED:-}
     ports:
       - "127.0.0.1:8081:8080"   # bank API (the backend listens inside this shared namespace)
       - "127.0.0.1:8787:8787"   # witness dashboard/API

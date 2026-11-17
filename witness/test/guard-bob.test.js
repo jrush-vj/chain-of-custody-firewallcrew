@@ -44,7 +44,8 @@ const rig = async ({ run, key = 'test-key', env = {} } = {}) => {
   const stub = run && ((prompt, options) => { calls.push(prompt); return run(prompt, options); });
   // The real guard path: only the Bob runner and environment are scripted.
   const guard = createGuard(store, config, { bobRun: stub, bobEnv: key ? { BOB_API_KEY: key } : {} });
-  const stop = async () => rm(directory, { recursive: true, force: true });
+  // The guard writes ledger events asynchronously: let them land, then delete (with retries).
+  const stop = async () => { await store.enqueue(async () => {}); await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 }); };
   return { store, guard, config, calls, directory, stop };
 };
 const incidentFor = async (guard, store, layer1Payload = null) => {
