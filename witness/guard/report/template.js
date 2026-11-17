@@ -30,7 +30,7 @@ export const buildReport = ({ incident, records, config, now = new Date(), narra
     .filter((record) => record.action === 'layer_event' && inWindow(record) && !String(record.payload.trigger).startsWith('guard:'))
     .map((record) => ({
       ...cite(record), layer: [1, 2, 3].includes(record.payload.layer) ? record.payload.layer : null,
-      trigger: safeName(record.payload.trigger), kind: safeName(record.payload.kind || '')
+      trigger: safeName(record.payload.trigger), kind: record.payload.kind ? safeName(record.payload.kind) : ''
     }));
   const containment = records
     .filter((record) => record.action === 'layer_event' && record.payload.trigger?.startsWith('guard:')
