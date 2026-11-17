@@ -36,3 +36,7 @@ Thumbs.db
 .claude/settings.local.json
 graphify-out/
 monitor.env
+
+# Local tool output
+.playwright-mcp/
+.impeccable/

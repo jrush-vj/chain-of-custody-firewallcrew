@@ -11,6 +11,9 @@ See [`banking-system/README.md`](./banking-system/README.md) for application
 setup. Configure secrets in `banking-system/.env` before starting the app.
 Never commit `.env` or real credentials.
 
+To run the full demo (bank, witness, attack lab and IBM Bob) on one laptop, follow
+[`deploy/local/QUICKSTART.md`](./deploy/local/QUICKSTART.md).
+
 ## Existing Cloudflare Tunnel
 
 The `bank.jrushvj.dev` Cloudflare Tunnel configuration on ct105-ai should
