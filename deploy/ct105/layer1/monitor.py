@@ -67,6 +67,10 @@ RESTORE_CHECK_S = 5
 HEARTBEAT_S = max(15.0, min(120.0, float(os.environ.get("HEARTBEAT_S", "30"))))
 CONFIG_CHECK_S = 5
 QUARANTINE_AFTER_S = float(os.environ.get("QUARANTINE_AFTER_S", "45"))
+# Soft containment (witness/guard). Off by default, so Layer 3 behaves exactly as before. When on, silence no
+# longer quarantines this host by itself: it reports "sealed" and waits for the witness to verify and decide.
+GUARD = os.environ.get("COC_GUARD", "0") == "1"
+_guard_done = set()  # guard orders already carried out, so each runs once
 # While this file exists every witness request fails, which simulates a cut network link in the demo.
 CUT_FLAG = os.environ.get("COC_WITNESS_CUT_FLAG", "/var/lib/coc-demo/witness-cut")
 _last_contact = time.time()
@@ -445,9 +449,47 @@ def layer3_trigger_reason():
     if changes:
         return "approved witness link settings changed: " + ", ".join(change["item"] for change in changes)
     silent = time.time() - _last_contact
-    if silent > QUARANTINE_AFTER_S:
+    if silent > QUARANTINE_AFTER_S and not GUARD:
         return f"no contact with the witness for {int(silent)} s"
     return None
+
+
+def guard_seal_event(silent_s):
+    """Soft containment: report that this box is sealed (unverified) instead of quarantining itself."""
+    return {
+        "layer": 3,
+        "trigger": "guard:box_sealed",
+        "state": "normal",
+        "summary": "box sealed: no contact with the witness; waiting for the witness to verify",
+        "detail": {"silent_s": str(int(silent_s))},
+        "who": {},
+    }
+
+
+def check_guard_decision(pending):
+    """Ask the witness whether soft containment ordered a quarantine, and carry it out once.
+
+    The witness only ever returns a fixed action; this side pulls it with a signed request, so no port
+    on this host is opened. The quarantine performed is the existing respond_to_layer3, unchanged.
+    """
+    try:
+        with open_witness(signed_request("GET", "/v1/guard-decision"), timeout=10) as response:
+            order = json.loads(response.read().decode("utf-8")).get("decision")
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        log(f"guard decision check unavailable: {error}")
+        return
+    if not order or order.get("action") != "quarantine" or order.get("id") in _guard_done:
+        return
+    _guard_done.add(order["id"])
+    reason = str(order.get("reason") or "soft containment ordered a quarantine")[:200]
+    log(f"guard ordered a quarantine ({order['id']}): {reason}")
+    pending.append(respond_to_layer3(reason))
+    body = json.dumps({"id": order["id"]}).encode("utf-8")
+    try:
+        with open_witness(signed_request("POST", "/v1/guard-ack", body), timeout=10):
+            pass
+    except (urllib.error.URLError, OSError) as error:
+        log(f"guard acknowledgement not delivered, will retry next check: {error}")
 
 
 def respond_to_layer3(reason):
@@ -504,6 +546,7 @@ def run():
     next_heartbeat = time.time()  # the first heartbeat goes out immediately
     next_config_check = time.time() + CONFIG_CHECK_S
     layer3_reason = None  # set while a quarantine is recorded, so it fires once per compromise
+    guard_sealed = False  # soft containment: true while this box reports itself sealed
     if config_guard.load_baseline() is None:
         log("no approved witness link settings yet; run l3_config_guard.py approve to arm the config check")
     log(f"watching {WATCH_DIR} and spool {COMMANDS_SPOOL}; armed={armed} wrappers={count}")
@@ -525,6 +568,8 @@ def run():
             next_status_check = time.time() + ARM_CHECK_S
         if time.time() >= next_restore_check:
             check_restore_request()
+            if GUARD:
+                check_guard_decision(pending)
             next_restore_check = time.time() + RESTORE_CHECK_S
         if time.time() >= next_heartbeat:
             _, heartbeat_interval = send_heartbeat(heartbeat_interval)
@@ -537,6 +582,15 @@ def run():
             elif not reason and layer3_reason:
                 log("layer 3 conditions cleared; armed again")
                 layer3_reason = None
+            if GUARD:
+                silent = time.time() - _last_contact
+                if silent > QUARANTINE_AFTER_S and not guard_sealed:
+                    guard_sealed = True
+                    pending.append(guard_seal_event(silent))
+                    log(f"GUARD: no contact with the witness for {int(silent)} s; sealed, not quarantined")
+                elif silent <= QUARANTINE_AFTER_S and guard_sealed:
+                    guard_sealed = False
+                    log("GUARD: contact with the witness is back; waiting for it to verify")
             next_config_check = time.time() + CONFIG_CHECK_S
 
         still_pending = []

@@ -249,5 +249,72 @@ class Layer3ResponseTests(unittest.TestCase):
         run_dry.assert_called_once()
         self.assertEqual(event, {"dry": True})
 
+
+class GuardRedirectTests(unittest.TestCase):
+    """Soft containment on the box: silence reports "sealed" instead of quarantining; the witness decides."""
+
+    def setUp(self):
+        self.saved = (monitor.GUARD, monitor.config_guard.drift, monitor._last_contact, monitor.respond_to_layer3,
+                      monitor.open_witness, monitor.signed_request, set(monitor._guard_done))
+        monitor.config_guard.drift = lambda: []
+        monitor._guard_done.clear()
+
+    def tearDown(self):
+        (monitor.GUARD, monitor.config_guard.drift, monitor._last_contact, monitor.respond_to_layer3,
+         monitor.open_witness, monitor.signed_request, done) = self.saved
+        monitor._guard_done.clear()
+        monitor._guard_done.update(done)
+
+    def test_silence_no_longer_quarantines_when_guard_is_on(self):
+        monitor.GUARD = True
+        monitor._last_contact = time.time() - (monitor.QUARANTINE_AFTER_S + 5)
+        self.assertIsNone(monitor.layer3_trigger_reason())
+
+    def test_changed_witness_settings_still_quarantine_directly_with_guard_on(self):
+        monitor.GUARD = True
+        monitor.config_guard.drift = lambda: [{"item": "WITNESS_URL"}]
+        self.assertIn("WITNESS_URL", monitor.layer3_trigger_reason())
+
+    def test_silence_still_quarantines_when_guard_is_off(self):
+        monitor.GUARD = False
+        monitor._last_contact = time.time() - (monitor.QUARANTINE_AFTER_S + 5)
+        self.assertIn("no contact with the witness", monitor.layer3_trigger_reason())
+
+    def test_seal_event_is_a_quiet_layer3_note(self):
+        event = monitor.guard_seal_event(61.7)
+        self.assertEqual((event["layer"], event["state"], event["trigger"]), (3, "normal", "guard:box_sealed"))
+        self.assertEqual(event["detail"], {"silent_s": "61"})
+
+    def _witness_says(self, decision, posted):
+        class Reply:
+            def __init__(self, body): self.body = body
+            def __enter__(self): return self
+            def __exit__(self, *args): return False
+            def read(self): return self.body
+        monitor.signed_request = lambda method, path, body=b"": (method, path, body)
+        def fake_open(request, timeout=10):
+            method, path, body = request
+            posted.append((method, path))
+            return Reply(json.dumps({"decision": decision}).encode("utf-8"))
+        monitor.open_witness = fake_open
+
+    def test_an_ordered_quarantine_is_carried_out_once_and_acknowledged(self):
+        calls, posted, pending = [], [], []
+        monitor.respond_to_layer3 = lambda reason: calls.append(reason) or {"layer": 3, "trigger": "quarantine:locked"}
+        self._witness_says({"id": "g-1-1", "action": "quarantine", "reason": "guard: tamper confirmed"}, posted)
+        monitor.check_guard_decision(pending)
+        monitor.check_guard_decision(pending)
+        self.assertEqual(calls, ["guard: tamper confirmed"], "the existing quarantine ran exactly once")
+        self.assertEqual(len(pending), 1)
+        self.assertIn(("POST", "/v1/guard-ack"), posted)
+
+    def test_no_order_or_an_unknown_action_does_nothing(self):
+        calls, posted, pending = [], [], []
+        monitor.respond_to_layer3 = lambda reason: calls.append(reason)
+        for decision in (None, {"id": "g-2", "action": "lockout-everything", "reason": "x"}):
+            self._witness_says(decision, posted)
+            monitor.check_guard_decision(pending)
+        self.assertEqual((calls, pending), ([], []))
+
 if __name__ == "__main__":
     unittest.main()

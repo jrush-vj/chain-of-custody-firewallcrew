@@ -30,6 +30,9 @@ export const loadGuardConfig = (env = process.env) => {
     tamperTimeoutS: integer(env, 'CONTAIN_TAMPER_TIMEOUT_S', 120),
     ambiguousTimeoutS: integer(env, 'CONTAIN_AMBIG_TIMEOUT_S', 900),
     ambiguousDefault: choice(env, 'CONTAIN_AMBIG_DEFAULT', 'stay_sealed', ['stay_sealed']),
+    // The whole guard is OFF unless enabled, so the witness behaves exactly as before by default.
+    guardEnabled: env.GUARD_ENABLED === '1',
+    approversRaw: env.APPROVERS || '',
     // Bob is OFF unless explicitly enabled. The narrative modes also need BOB_ENABLED=1 (used from Phase 3).
     bobEnabled: env.BOB_ENABLED === '1',
     reportNarrative: choice(env, 'REPORT_NARRATIVE', 'off', REPORT_NARRATIVE_MODES)

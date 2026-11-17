@@ -7,6 +7,8 @@ import { WitnessStore } from './store.js';
 import { recheckPendingBankRows, startChallenges } from './reconcile.js';
 import { amountMinor } from './records.js';
 import { evaluateHeartbeat, evidenceMismatches, receiveRows, recordCounts } from './banksync.js';
+import { loadGuardConfig } from './guard/config.js';
+import { createGuard } from './guard/guard.js';
 
 const port = Number(process.env.WITNESS_PORT || 8787);
 const bindHost = process.env.WITNESS_BIND_HOST || '127.0.0.1';
@@ -26,6 +28,8 @@ const heartbeatMissedLimit = Number(process.env.WITNESS_HEARTBEAT_MISSED || 3);
 // Layer 3: this long without any signed request from ct105 and the witness presumes a quarantine.
 const quarantineAfterS = Number(process.env.WITNESS_QUARANTINE_AFTER_S || 45);
 const holderNames = ['SOC lead', 'Auditor', 'Compliance officer'];
+// Soft containment (witness/guard). Off unless GUARD_ENABLED=1, so default behaviour is unchanged.
+const guardConfig = loadGuardConfig();
 // Same Layer 2 alert kinds the Cybersec auditor view groups under the Layer 2 card.
 const LAYER2_KINDS = new Set(['sequence_gap', 'chain_break', 'bad_signature', 'unknown_key_id', 'entry_edited',
   'entry_deleted', 'entries_reordered', 'entry_replayed', 'late_entry', 'challenge_mismatch',
@@ -65,7 +69,7 @@ const toEpochSeconds = (value) => (value ? Date.parse(value) / 1000 : null);
 const quarantineState = (store, nowMs = Date.now()) => {
   // bob:* events are IBM Bob's briefs about Layer 3, not ct105 state; they must not mask a quarantine.
   const latest = store.recentLayerEvents()
-    .filter((item) => item.layer === 3 && !item.resolved && !item.trigger.startsWith('bob:')).at(-1);
+    .filter((item) => item.layer === 3 && !item.resolved && !item.trigger.startsWith('bob:') && !item.trigger.startsWith('guard:')).at(-1);
   const base = {
     after: quarantineAfterS,
     needed: 2,
@@ -82,7 +86,8 @@ const quarantineState = (store, nowMs = Date.now()) => {
       id: latest.detail.quarantine_id || null
     };
   }
-  if (store.lastContactAt && nowMs - store.lastContactAt > quarantineAfterS * 1000) {
+  // With the guard on, silence alone no longer presumes a quarantine: the guard seals and asks a human.
+  if (!guardConfig.guardEnabled && store.lastContactAt && nowMs - store.lastContactAt > quarantineAfterS * 1000) {
     return { ...base, active: true, since: store.lastContactAt / 1000, confirmed: false, id: null };
   }
   return { ...base, active: false, since: null, confirmed: false, id: null };
@@ -438,8 +443,8 @@ const authorize = (request, pathname, body) => {
   }
 };
 
-export const createWitnessServer = (store) =>
-  createServer(async (request, response) => {
+export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? createGuard(store, guardConfig) : null) => {
+  const server = createServer(async (request, response) => {
     const pathname = new URL(request.url, 'http://localhost').pathname;
     // A signed request that passes authorization is proof of contact with ct105.
     const authorizeContact = (req, requestPath, body) => {
@@ -584,6 +589,35 @@ export const createWitnessServer = (store) =>
           layers: (payload.layers ?? []).map(({ layer, status, what, did, result }) => ({ layer, status, what, did, result }))
         };
         return sendJson(response, 200, { status: 'recorded' });
+      }
+      // Soft containment API (only when GUARD_ENABLED=1). Approvals need an approver token; no UI.
+      if (guard && request.method === 'GET' && pathname === '/guard/state') {
+        return sendJson(response, 200, guard.state());
+      }
+      if (guard && request.method === 'GET' && pathname === '/v1/guard-decision') {
+        authorize(request, pathname, '');
+        return sendJson(response, 200, { decision: guard.pendingDecision() });
+      }
+      if (guard && request.method === 'POST' && pathname === '/v1/guard-ack') {
+        const body = await readBody(request);
+        authorize(request, pathname, body);
+        let parsed = {};
+        try { parsed = JSON.parse(body || '{}'); } catch { return sendJson(response, 400, { error: 'Invalid JSON body' }); }
+        if (typeof parsed.id === 'string') guard.acknowledge(parsed.id);
+        return sendJson(response, 200, { status: 'ok' });
+      }
+      const approval = guard && request.method === 'POST' ? /^\/guard\/approvals\/([A-Za-z0-9_-]{1,64})$/.exec(pathname) : null;
+      if (approval) {
+        const body = await readBody(request);
+        const approver = guard.authenticate(request.headers);
+        if (!approver) {
+          return sendJson(response, guard.approversConfigured ? 401 : 403,
+            { error: guard.approversConfigured ? 'Approver authentication failed' : 'No approvers are configured' });
+        }
+        let parsed;
+        try { parsed = JSON.parse(body || '{}'); } catch { return sendJson(response, 400, { error: 'Invalid JSON body' }); }
+        const incident = guard.decide(approval[1], approver, parsed.choice);
+        return sendJson(response, 200, { status: 'recorded', incident: { id: incident.id, state: incident.state } });
       }
       // Key-holder approval for a confirmed quarantine. The quarantine is a dry run, so nothing on ct105
       // needs unlocking: two approvals only record a release on the witness.
@@ -742,6 +776,9 @@ export const createWitnessServer = (store) =>
       return sendJson(response, statusCode, { error: statusCode >= 500 ? 'Witness request failed' : error.message });
     }
   });
+  server.guard = guard;
+  return server;
+};
 
 // Raises a Layer 2 'silence' alert once the monitored host has missed too many heartbeats. It only
 // arms after the first heartbeat, so a witness restart does not alert before ct105 has had a chance to beat.
@@ -781,6 +818,11 @@ const start = async () => {
   }
   const server = createWitnessServer(store);
   startChallenges(store);
+  if (server.guard) {
+    setInterval(() => {
+      try { server.guard.tick(); } catch (error) { console.error('Guard tick failed:', error.message); }
+    }, 5_000);
+  }
   setInterval(() => {
     checkHeartbeatSilence(store).catch((error) => console.error('Heartbeat silence check failed:', error.message));
   }, 5_000);
