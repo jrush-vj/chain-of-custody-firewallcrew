@@ -322,3 +322,32 @@ test('"Restore to normal" closes a quarantined incident, and the next attack ope
     assert.ok(second && second.id !== first.id && second.state === 'PENDING');
   } finally { await stop(); }
 });
+
+test('a reconnect seen while tampering was open does not reopen an incident after it is resolved', async () => {
+  const { guard, store, stop } = await start();
+  try {
+    const t = Date.now();
+    // The link drops and the witness raises silence.
+    await store.recordLayerEvent({ layer: 2, trigger: 'heartbeat_silence', kind: 'silence', state: 'alert', summary: 's', detail: {}, who: {} });
+    guard.tick(t);
+    // It comes back while a real mismatch is still open, and the witness's own bank comparison runs again.
+    await store.resolveLayerEvents('heartbeat resumed', { layer: 2, kind: 'silence' });
+    await store.recordLayerEvent({ layer: 2, trigger: 'record_edited', kind: 'entry_edited', state: 'alert', summary: 'edit', detail: { record: 5 }, who: {} });
+    guard.tick(t + 1000);
+    store.reconciliation = { ...store.reconciliation, state: 'ok', checked_at: new Date(t + 2000).toISOString() };
+    guard.tick(t + 3000);
+    const incident = guard.machine.snapshot().find((item) => item.class === 'TAMPER_CONFIRMED');
+    assert.ok(incident, 'the open mismatch is a real tamper incident');
+    guard.decide(incident.id, 'soc-lead', 'approve'); // real time, so the box's lock report is later than the order
+    await store.recordLayerEvent({ layer: 3, trigger: 'quarantine:locked', state: 'alert', summary: 'dry run', detail: { quarantine_id: 'q-9', dry_run: true }, who: {} });
+    guard.tick(t + 5000);
+    // "Restore to normal" resolves everything.
+    await store.resolveLayerEvents('restore completed');
+    guard.tick(t + 6000);
+    assert.equal(guard.machine.get(incident.id).state, 'RESUMED');
+    // Nothing is open any more: many later ticks must not conjure a new incident from the stale reconnect.
+    for (let i = 1; i <= 10; i += 1) guard.tick(t + 6000 + i * 5000);
+    assert.equal(guard.machine.active(), null, 'no phantom incident');
+    assert.equal(guard.machine.snapshot().filter((item) => item.class === 'TAMPER_CONFIRMED').length, 1);
+  } finally { await stop(); }
+});
