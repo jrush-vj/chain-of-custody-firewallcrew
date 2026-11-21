@@ -368,14 +368,72 @@ test('live finding: a reply wrapped in one fenced block is accepted; prose aroun
   assert.equal(validateOutput(`${fence}json\n${goodNote}\n${fence}\n${fence}json\n${goodNote}\n${fence}`, ctx).ok, false, 'two blocks');
 });
 
-test('live finding: Bob role-plays tool calls with invented output in its text; that is rejected', async () => {
+// Decision (user, 2026-11-21): a call written out as text is an attempt, recorded in the ledger like a real one.
+// Nothing ran, so the report still shows no Bob text and none of the invented output.
+test('live finding: Bob role-plays tool calls with invented output in its text; that is a recorded attempt', async () => {
   const faked = '<tool_call>\n{"name": "execute_command", "parameters": {"command": "ls /"}}\n</tool_call>\n<tool_response>\nbin boot snap\n</tool_response>\nHere are the results.';
   const { guard, store, stop } = await rig({ run: () => bobSays(faked) });
   try {
     const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
-    assert.equal(report.narrative.status, 'rejected');
+    assert.equal(report.narrative.status, 'tool_attempt');
     assert.equal(report.narrative.text, null);
     assert.ok(!JSON.stringify(report).includes('snap'), 'the invented output never reaches the report');
+    const alert = store.records.find((r) => r.payload.trigger === 'guard:bob_tool_attempt');
+    assert.ok(alert, 'the written-out attempt is in the ledger');
+    assert.equal(alert.payload.state, 'alert');
+    assert.equal(alert.payload.detail.tools, 'written-as-text');
+  } finally { await stop(); }
+});
+
+// Seen live against Bob Shell 2.1.0 with all 11 tool groups disabled: no tool_use event and tool_calls 0, yet the
+// reply held a made-up call and made-up output (uid=1000 while a real run as root gives uid=0).
+test('the exact live text (function_calls markup) is recorded as an attempt', async () => {
+  const faked = '<function_calls> <invoke name="execute_command"> <parameter name="command">id && ls /</parameter> </invoke> </function_calls> <function_response> uid=1000(user) </function_response>';
+  const { guard, store, stop } = await rig({ run: () => bobSays(faked) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'tool_attempt');
+    assert.equal(store.records.filter((r) => r.payload.trigger === 'guard:bob_tool_attempt').length, 1);
+    assert.equal(verifyReport(report, store.records).ok, true);
+  } finally { await stop(); }
+});
+
+test('ordinary prose that merely mentions a function or a tool is not an attempt', async () => {
+  const note = JSON.stringify({ summary: 'The invoke of the check function found one differing record.', points: ['a tool was not needed'], confidence: 'high' });
+  const { guard, store, stop } = await rig({ run: () => bobSays(note) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'ok');
+    assert.equal(store.records.find((r) => r.payload.trigger === 'guard:bob_tool_attempt'), undefined);
+  } finally { await stop(); }
+});
+
+// The CLI reports cost but no tokens, so cost is the only spend figure; it used to be dropped on the way to the ledger.
+test('every Bob run leaves a spend record in the ledger, whatever its outcome', async () => {
+  const outcomes = [
+    ['ok', () => bobSays(goodNote), 'ok'],
+    ['rejected', () => bobSays('not json at all'), 'rejected'],
+    ['tool attempt', () => bobSays(goodNote, { toolCalls: 1 }), 'tool_attempt']
+  ];
+  for (const [label, run, status] of outcomes) {
+    const { guard, store, stop } = await rig({ run });
+    try {
+      await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+      const runs = store.records.filter((r) => r.payload.trigger === 'guard:bob_run');
+      assert.equal(runs.length, 1, `${label}: exactly one spend record`);
+      assert.equal(runs[0].payload.state, 'normal');
+      assert.equal(runs[0].payload.detail.status, status, label);
+      assert.equal(runs[0].payload.detail.cost, '0.01', `${label}: the cost the CLI reported`);
+    } finally { await stop(); }
+  }
+});
+
+test('a Bob run that could not start records no spend', async () => {
+  const { guard, store, stop } = await rig({ run: () => ({ failed: 'bob could not start' }) });
+  try {
+    const report = await guard.generateReport((await incidentFor(guard, store)).id, { narrate: true });
+    assert.equal(report.narrative.status, 'unavailable');
+    assert.equal(store.records.find((r) => r.payload.trigger === 'guard:bob_run'), undefined);
   } finally { await stop(); }
 });
 

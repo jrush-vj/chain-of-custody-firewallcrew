@@ -22,6 +22,8 @@ import { numbersIn, validateOutput } from './schema.js';
 export const TOOL_GROUPS = Object.freeze(['read', 'edit', 'execute', 'browser', 'mcp', 'skill', 'todo', 'artifact', 'subtask', 'subagent', 'mode']);
 const ENV_ALLOWED = ['BOB_API_KEY', 'PATH', 'HOME', 'USERPROFILE', 'SystemRoot', 'TEMP', 'TMP', 'LANG'];
 const MAX_UNTRUSTED = 12;
+// A tool call written out as text instead of being made: the markup Bob Shell's model uses for its calls.
+export const TOOL_MARKUP = /<\s*\/?\s*(function_calls|invoke|tool_call|tool_use|execute_command)\b/i;
 
 export const bobArgs = ({ workspace, prompt, maxCost = '0.3', maxTurns = '3' }) => [
   'run', '--accept-license', '--format', 'stream-json', '--workspace', workspace,
@@ -114,24 +116,34 @@ export const createBobAdapter = ({ config, run = spawnBob, env = process.env, on
     }
     if (!result || result.failed || !Array.isArray(result.events)) return { status: 'unavailable', reason: 'Bob could not be run', flags: bundle.flags };
 
-    // Bob has no tools. Any attempt to call one is a tamper event, whatever else it said. Two independent
-    // signals (checked live against Bob Shell 2.1.0): a tool_use event per call, and stats.tool_calls.
     const final = [...result.events].reverse().find((event) => event && event.type === 'result');
-    const toolAttempts = result.events.filter((event) => event && event.type === 'tool_use');
-    const countedCalls = Number(final && final.stats && final.stats.tool_calls) || 0;
-    if (toolAttempts.length > 0 || countedCalls > 0) {
-      const names = [...new Set(toolAttempts.map((event) => String(event.tool_name).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40)))];
-      const count = Math.max(toolAttempts.length, countedCalls);
-      onEvent({ type: 'tool_attempt', tools: names.length ? names : ['unknown'], count });
-      return { status: 'tool_attempt', reason: 'Bob tried to call a tool', tools: names, flags: bundle.flags };
-    }
+    const cost = final?.stats?.session_costs ?? null;
+    // Every run that happened is recorded with its cost, whatever its outcome: the CLI reports no tokens, so
+    // cost is the only spend figure, and without this it appeared in no report and no ledger entry.
+    const finish = (outcome) => { onEvent({ type: 'run', status: outcome.status, cost }); return outcome; };
 
     // In stream-json the answer arrives as assistant message chunks; the result event carries only stats.
     const text = result.events
       .filter((event) => event && event.type === 'message' && event.role === 'assistant' && typeof event.content === 'string')
       .map((event) => event.content).join('');
+
+    // Bob has no tools. Any attempt to call one is a tamper event, whatever else it said. Three signals: a
+    // tool_use event per call and stats.tool_calls (both checked live against Bob Shell 2.1.0), and a call
+    // written out as plain text. With every tool group disabled the model still writes a made-up call and
+    // invents its output; nothing runs, but it is an attempt and is recorded like a real one.
+    const toolAttempts = result.events.filter((event) => event && event.type === 'tool_use');
+    const countedCalls = Number(final && final.stats && final.stats.tool_calls) || 0;
+    const writtenCall = TOOL_MARKUP.test(text);
+    if (toolAttempts.length > 0 || countedCalls > 0 || writtenCall) {
+      const names = [...new Set(toolAttempts.map((event) => String(event.tool_name).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40)))];
+      const count = Math.max(toolAttempts.length, countedCalls, 1);
+      const shown = names.length ? names : [countedCalls > 0 ? 'unknown' : 'written-as-text'];
+      onEvent({ type: 'tool_attempt', tools: shown, count });
+      return finish({ status: 'tool_attempt', reason: 'Bob tried to call a tool', tools: names, flags: bundle.flags });
+    }
+
     const checked = validateOutput(text.trim(), bundle);
-    if (!checked.ok) return { status: checked.suspect ? 'suspect' : 'rejected', reason: checked.reason, flags: bundle.flags };
-    return { status: 'ok', value: checked.value, flags: bundle.flags, cost: final.stats?.session_costs ?? null };
+    if (!checked.ok) return finish({ status: checked.suspect ? 'suspect' : 'rejected', reason: checked.reason, flags: bundle.flags });
+    return finish({ status: 'ok', value: checked.value, flags: bundle.flags, cost });
   }
 });
