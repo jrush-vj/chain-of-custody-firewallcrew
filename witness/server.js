@@ -63,6 +63,13 @@ const sendJson = (response, statusCode, payload) => {
 
 const toEpochSeconds = (value) => (value ? Date.parse(value) / 1000 : null);
 
+// The dashboard's own buttons carry no secret, so a page on another site must not be able to press them for
+// the operator's browser. Browsers always send Origin on a POST; scripts (curl) send none and are unaffected.
+const isCrossOrigin = (request) => {
+  const origin = request.headers.origin;
+  return Boolean(origin) && origin !== `http://${request.headers.host}` && origin !== `https://${request.headers.host}`;
+};
+
 // Layer 3 state, derived from what ct105 reported. A confirmed quarantine is an unresolved
 // 'quarantine:locked' event that no later event releases. Without one, the witness still presumes a
 // quarantine when ct105 has been silent past the threshold (only after the first contact).
@@ -501,6 +508,9 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
       // no parameters, and ct105 polls for it with a signed request, so nothing on ct105 is exposed.
       if (request.method === 'POST' && pathname === '/v1/restore-request') {
         await readBody(request);
+        if (isCrossOrigin(request)) {
+          return sendJson(response, 403, { error: 'Cross-origin request refused' });
+        }
         const now = Date.now();
         if (store.restoreRequest) {
           return sendJson(response, 409, { status: 'already_requested', id: store.restoreRequest.id });
@@ -546,8 +556,7 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
         // Master switch: with Bob off, the button does nothing and no paid run is ever queued.
         if (!guardConfig.bobAllowed) return sendJson(response, 403, { error: 'Bob is disabled on this witness', bob: 'disabled' });
         // Each request starts a paid Bob run with root on the lab: only this dashboard may ask.
-        const origin = request.headers.origin;
-        if (origin && origin !== `http://${request.headers.host}` && origin !== `https://${request.headers.host}`) {
+        if (isCrossOrigin(request)) {
           return sendJson(response, 403, { error: 'Cross-origin request refused' });
         }
         const now = Date.now();
@@ -655,6 +664,9 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
       // Key-holder approval for a confirmed quarantine. The quarantine is a dry run, so nothing on ct105
       // needs unlocking: two approvals only record a release on the witness.
       if (request.method === 'POST' && pathname === '/quarantine/approve') {
+        if (isCrossOrigin(request)) {
+          return sendJson(response, 403, { error: 'Cross-origin request refused' });
+        }
         let payload = {};
         try {
           payload = JSON.parse((await readBody(request)) || '{}');
