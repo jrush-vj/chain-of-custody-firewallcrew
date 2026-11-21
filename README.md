@@ -14,6 +14,32 @@ Never commit `.env` or real credentials.
 To run the full demo (bank, witness, attack lab and IBM Bob) on one laptop, follow
 [`deploy/local/QUICKSTART.md`](./deploy/local/QUICKSTART.md).
 
+## Run the pieces locally
+
+Banking app (`banking-system/`, uses PostgreSQL from its `.env`):
+
+```bash
+cd banking-system
+npm install
+npm start
+```
+
+Witness (`witness/`, Node, no database):
+
+```bash
+cd witness
+npm install
+npm test     # 133 tests, no key and no Docker needed
+npm start    # auditor view at http://localhost:8787/
+```
+
+`WITNESS_PORT` changes the witness port (default 8787). The banking backend
+reads `PORT` from `banking-system/.env` (default 5000). Layers 1, 2 and 3 run
+against the bank in the lab container started by `deploy/local/test-stack.sh`
+(see the quickstart); the Python tests for each layer run with
+`bash deploy/local/test-stack.sh unit`. Demo recordings are listed in
+[`Videos/LINK.md`](./Videos/LINK.md); the video files are not stored in git.
+
 ## Existing Cloudflare Tunnel
 
 The `bank.jrushvj.dev` Cloudflare Tunnel configuration on ct105-ai should
@@ -65,15 +91,8 @@ integration.
 ## Cybersec detection project
 
 The upstream [`JeevikaS-19/cybersec`](https://github.com/JeevikaS-19/cybersec)
-repository is linked as the [`cybersec/`](./cybersec/) Git submodule. Initialize
-it after cloning with:
-
-```bash
-git submodule update --init --recursive
-```
-
-The Cybersec submodule remains pinned to upstream revision `73cfe0c` and is
-not modified. The Node witness serves the integration-owned `witness/auditor.html`
+repository is not included in this repo. It was a Git submodule pinned to
+`73cfe0c`; that submodule has been removed. The Node witness serves the integration-owned `witness/auditor.html`
 page (including its existing "Restore to normal" control) and compatible live API
 routes on the existing `127.0.0.1:8787` service. The dashboard's Layer 2
 live result is the existing comparison between committed witness events and

@@ -29,7 +29,7 @@ Clone or update the repository into a new path without overwriting any existing
 checkout. On Oracle, run:
 
 ```bash
-sudo bash -e -c 'test ! -e /opt/coc-witness-source && git clone --recurse-submodules https://github.com/jrush-vj/chain-of-custody-firewallcrew.git /opt/coc-witness-source'
+sudo bash -e -c 'test ! -e /opt/coc-witness-source && git clone https://github.com/jrush-vj/chain-of-custody-firewallcrew.git /opt/coc-witness-source'
 ```
 
 If that source path already exists, inspect it and do not clone over it. Then
@@ -242,8 +242,6 @@ git status --short
 test "$(git branch --show-current)" = main
 test -z "$(git status --porcelain)"
 git pull --ff-only origin main
-git submodule sync --recursive
-git submodule update --init --recursive
 for f in server.js auditor.html records.js banksync.js store.js reconcile.js package.json; do
   test -s "/opt/coc-witness-source/witness/$f" || { echo "Missing witness release file: $f"; exit 1; }
 done
@@ -267,7 +265,7 @@ must not be replaced with a reset or forced update. No Cloudflare Tunnel
 change is needed when it already routes `witness.jrushvj.dev` to
 `127.0.0.1:8787`.
 
-On ct105, update the root checkout and its pinned cybersec submodule using the
+On ct105, update the root checkout using the
 existing deployment service; this dashboard-only release does not require a
 banking container rebuild. Follow [`../deploy/ct105/README.md`](../deploy/ct105/README.md)
 for the safe update commands. Do not recreate or delete the PostgreSQL volume.

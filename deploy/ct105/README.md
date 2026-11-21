@@ -99,9 +99,9 @@ another release.
 ## Applying a repository release on ct105
 
 For a dashboard-only Oracle release, ct105 only needs the new root commit and
-the submodule revision pinned by it; no banking containers need rebuilding.
+no banking containers need rebuilding.
 On ct105, first confirm the checkout is clean. Then pause the timer while the
-deployment service advances the checkout and the submodule:
+deployment service advances the checkout:
 
 ```bash
 sudo git -C /opt/chain-of-custody branch --show-current
@@ -111,7 +111,6 @@ test -z "$(sudo git -C /opt/chain-of-custody status --porcelain)"
 sudo systemctl stop banking-deploy.timer
 trap 'sudo systemctl start banking-deploy.timer' EXIT
 sudo systemctl start banking-deploy.service
-sudo git -C /opt/chain-of-custody submodule update --init --recursive
 sudo git -C /opt/chain-of-custody status --short
 sudo systemctl start banking-deploy.timer
 trap - EXIT
@@ -121,8 +120,7 @@ curl --fail https://witness.jrushvj.dev/health
 
 If the initial status check shows local changes, do not pull over them; inspect
 and preserve them first. The deployment service will rebuild the banking
-stack only if `banking-system/` changed, and the submodule update checks out
-the exact cybersec commit recorded by the root repository. Do not run `docker
+stack only if `banking-system/` changed. Do not run `docker
 compose down`, remove volumes, or rebuild PostgreSQL for an Oracle dashboard
 change.
 

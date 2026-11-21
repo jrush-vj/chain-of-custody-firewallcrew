@@ -8,7 +8,7 @@ MIT licence in [LICENSE](../LICENSE).
 | Item | Link | What we took | Licence |
 | --- | --- | --- | --- |
 | Banking application | https://github.com/jtr-0901/Banking-system-fullstack | The banking app that the Layer 2 and Layer 3 demos run against, imported as `banking-system/`. Our witness integration (`banking-system/backend/services/witness*.js`) and the ct105 deploy scripts are ours. | MIT (upstream `package.json`) |
-| Cybersec detection project | https://github.com/JeevikaS-19/cybersec | Linked as the `cybersec/` submodule, pinned to `73cfe0c`, not modified. Its UI is served by the witness through `witness/auditor.html`. | **No licence file upstream.** Redistribution needs the author's permission. |
+| Cybersec detection project | https://github.com/JeevikaS-19/cybersec | Formerly the `cybersec/` submodule, pinned to `73cfe0c`; removed from this repo, not modified. Its UI is served by the witness through `witness/auditor.html`. | **No licence file upstream.** Redistribution needs the author's permission. |
 
 ## AI tools used
 

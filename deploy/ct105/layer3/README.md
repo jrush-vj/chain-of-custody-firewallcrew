@@ -114,8 +114,7 @@ treating a partial result as success.
 
 ## Witness and banking boundaries
 
-Layer 3 reports through the existing monitor event path. This change does not modify the Cybersec
-submodule, the Node witness, Cloudflare configuration, or anything under `banking-system/`. The
+Layer 3 reports through the existing monitor event path. This change does not modify the Node witness, Cloudflare configuration, or anything under `banking-system/`. The
 existing Cybersec witness approval implementation is therefore unchanged; do not treat its signed
 unlock workflow as the recovery path for this separate full-lockout mode.
 

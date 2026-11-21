@@ -43,3 +43,6 @@ monitor.env
 
 # Local Bob run records (prompts and raw output; Bob has root, so these may hold secrets)
 deploy/local/bob/runs/
+
+# Demo videos are not stored in git (see Videos/LINK.md)
+Videos/*.mp4
