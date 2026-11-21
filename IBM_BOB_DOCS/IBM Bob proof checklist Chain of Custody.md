@@ -109,36 +109,71 @@ End with a totals row for every numeric column, and an average per incident. Mar
 
 ## 7. Still to fill
 
-Filled by IBM Bob audit, 2025-01-21. All paths are relative to the repo root.
+Updated 2026-11-21 by IBM Bob (B6). Covers both the legacy local defender and the guard integration.
+All paths are relative to the repo root. Branch `integration` is the current working branch (16 commits ahead of origin/main, 0 behind).
 
-- **BOB\_ENABLED switch:** No `BOB_ENABLED` env var exists in this codebase. The equivalent is
-  `BOB_API_KEY`: if it is unset, `defender.mjs` throws on startup and Bob does not run. Set it via
-  environment or a `.env` file listed in `.gitignore`. File: `deploy/local/bob/defender.mjs`, line ~170
-  (`if (!process.env.BOB_API_KEY) throw new Error('BOB_API_KEY is not set')`).
-  Run-rate cap is `BOB_MAX_RUNS_PER_HOUR` (default 6) in the same file.
+---
 
-- **Bob client and prompts:** `deploy/local/bob/defender.mjs`
-  - `prompt(layer, alerts)` — per-layer live-alert prompt (line ~100)
-  - `diagnosisPrompt(evidence)` — full walkthrough prompt (line ~130)
-  - `runBob(text, opts)` — spawns `bob run` inside the `coc-lab` container (line ~150)
-  - No separate prompt template files exist; prompts are inline functions in `defender.mjs`.
+### Legacy "Diagnose with Bob" path (branch `origin/main`, local demo only)
 
-- **Report templates:** No separate template files. Output shapes are enforced in:
-  - `parseReport(text)` — parses `{"status":…,"summary":…,"what":…,"did":…,"result":…}` from Bob output
-  - `parseDiagnosis(text)` — parses `{"summary":…,"layers":[…]}` from walkthrough output
-  Both are in `deploy/local/bob/defender.mjs` (lines ~55–80).
+- **BOB\_ENABLED switch (legacy):** `BOB_API_KEY` only. If unset, `deploy/local/bob/defender.mjs` throws
+  on startup (`main()` last line). No `BOB_ENABLED` env var in the legacy path.
+  Rate cap: `BOB_MAX_RUNS_PER_HOUR` (default 6), same file.
 
-- **Guardrail and test files:**
-  - `deploy/local/bob/defender.test.mjs` — unit tests for `layerOf`, `newIncidents`, `parseReport`, `parseDiagnosis`
-  - `witness/test/server.test.js` — witness server tests (alerts, quarantine, layer events)
-  - `deploy/local/e2e.mjs` — end-to-end stack checks
-  - Run all with: `bash deploy/local/test-stack.sh unit` and `bash deploy/local/test-stack.sh test`
+- **Bob client and prompts (legacy):** `deploy/local/bob/defender.mjs`
+  - `diagnosisPrompt(evidence)` — full walkthrough prompt (inline function)
+  - `prompt(layer, alerts)` — per-layer live-alert prompt (inline function, used in `BOB_AUTO=1` mode)
+  - `runBob(text, opts)` — spawns `bob run --trust` inside `coc-lab` as root with the Docker socket and repo mounted
 
-- **Ledger file for Bob calls:** No dedicated Bob cost ledger. Bob posts its reports as `layer_event`
-  records into the main witness JSONL ledger at `WITNESS_DATA_PATH` (default
-  `/var/lib/banking-witness/ledger.jsonl` on Oracle, `/data/ledger.jsonl` in Docker).
-  Bob events use trigger prefixes `bob:investigating` and `bob:report`; the diagnosis result is stored
-  in `store.bobDiagnosis` (in-memory, not ledger). Fields in a `bob:report` event:
-  `{ layer, trigger, state, summary, detail: { status, what, did, result, cost, seconds }, who: { agent: "ibm-bob" } }`.
-  Cost tracking: `run.cost` from `bob run --format json` output (`stats.session_costs`), printed to
-  the defender console. No persistent per-call cost ledger exists yet.
+- **Report templates (legacy):** No separate template files. `parseReport()` and `parseDiagnosis()` are
+  output parsers only. The with/without-template comparison was not run (see T2).
+
+- **Guardrail and test files (legacy):**
+  - `deploy/local/bob/defender.test.mjs` — 6 unit tests (parsers, alert mapping; does not exercise Bob)
+  - `witness/test/server.test.js` — witness server tests
+  - Run: `bash deploy/local/test-stack.sh unit`
+
+- **Ledger file for Bob calls (legacy):** No persistent ledger for Bob calls. `store.bobDiagnosis` is
+  in memory only (lost on restart). `bob:report` events (BOB\_AUTO mode) carry `cost` and `seconds`
+  in the witness JSONL ledger. No token counts anywhere. Each run now saved to `deploy/local/bob/runs/`
+  (gitignored) since the phase-2 fix.
+
+---
+
+### Guard integration path (branch `integration`, the design the checklist describes)
+
+- **BOB\_ENABLED switch (guard):** `BOB_ENABLED=1` env var. Defined in `witness/guard/config.js` line 37
+  (`bobEnabled: env.BOB_ENABLED === '1'`). Master switch: when the guard is on, Bob is allowed only if
+  `BOB_ENABLED=1`; when the guard is off, Bob is allowed unless `BOB_ENABLED=0` (backward-compatible).
+  `REPORT_NARRATIVE` controls whether Bob writes a note (`off` / `bob_on_demand` / `bob_auto`);
+  narrative modes require `BOB_ENABLED=1`.
+
+- **Bob client and prompts (guard):** `witness/guard/bob/adapter.js`
+  - `buildBundle({ report, records })` — assembles the evidence bundle; attacker strings pre-scanned by `prescan.js`
+  - `INSTRUCTIONS` constant (line 57) — the system prompt: read-only, no tools, JSON output schema
+  - `spawnBob(prompt, opts)` — spawns `bob run --disable-tool-groups <all 11 groups> --command-security --disable-mcp --disable-subagents` in an empty temp workspace with only `BOB_API_KEY` in the environment
+  - `createBobAdapter({ config, run, env, onEvent })` → `.narrate({ report, records })` — main entry point
+  - `cleanEnv()` — strips all env vars except `BOB_API_KEY` and OS path vars (line 23)
+
+- **Report templates (guard):** `witness/guard/report/template.js`
+  - `buildReport({ incident, records, config, now, narrative })` — deterministic structured report
+  - Every value comes from the classifier, containment machine, or the witness's own ledger; no free text from the box
+  - The optional Bob note is in the `narrative` field, always labelled, and the template stands without it
+  - Output shape (TypeScript-like): `{ version, report_id, incident, generated_at, detection, classification, layers, containment, seq_range, chain_verification, scope, open_items, sign_off, summary[], narrative, sha256 }`
+
+- **Guardrail and test files (guard):**
+  - `witness/guard/bob/prescan.js` — 9 injection-pattern rules; flags and withholds attacker text before it reaches Bob
+  - `witness/guard/bob/schema.js` — strict output validator: schema check, canary echo check, number-in-evidence check, attacker-text repeat check (24-char fragments for flagged, 40-char for other)
+  - `witness/test/guard-bob.test.js` — 9 live CLI runs (benign, 6 payloads, 2 extra); all 6 payloads withheld; 2 echoes rejected
+  - `witness/test/guard-bob-switch.test.js` — BOB\_ENABLED on/off, narrative modes
+  - `witness/test/guard-bob-default.test.js` — default adapter (no key) returns unavailable
+  - `witness/test/guard-classify.test.js` — classifier unit tests
+  - `witness/test/guard-containment.test.js` — containment state machine tests
+  - `witness/test/guard-report.test.js` — template output validation
+  - `witness/test/dashboard-origin.test.js` — cross-origin checks
+  - Run all: `bash deploy/local/test-stack.sh unit` → 133/133 on branch `integration` (MEASURED)
+
+- **Ledger file for Bob calls (guard):** Bob writes nothing to the JSONL ledger directly.
+  The guard records `guard:provenance_warning` layer events when attacker text is flagged (before Bob).
+  `guard:report` layer events record when a report is generated. Each Bob run's prompt, output, cost and
+  CLI stats are saved to `deploy/local/bob/runs/` (gitignored) by the fix added in phase 2.

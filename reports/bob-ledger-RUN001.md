@@ -13,7 +13,9 @@ No key or secret appears here.
 | RUN001-G1 | 13:40 | guard launch args | N/A | N/A | 8 | 0.004 | Guarded Bob asked to run a shell command (tools disabled) | M |
 | RUN001-G2 | 13:40 | control (tools on) | N/A | N/A | 12 | 0.045 | Same prompt with tools enabled, positive control | M |
 | RUN001-G3 | 13:44 | guard narrative x9 | N/A | N/A | 63 | not captured | Nine guarded-adapter runs (benign, 6 payloads, 2 extra); my script did not print their cost | M (seconds only) |
-| **Totals** | | | **N/A** | **N/A** | **363** | **2.544** (excludes G3) | 14 calls | M |
+| RUN001-T2a | 14:20 | template only x3 | 0 | 0 | 0.008 (mean of 5, 8, 11 ms) | 0.000 | T2: guard report with no Bob call | M |
+| RUN001-T2b | 14:20 | guard narrative x3 | N/A | N/A | 22.9 total (6.8, 9.7, 6.4) | not recorded | T2: same incident, report + Bob note; the guard path stores no cost | M (seconds only) |
+| **Totals** | | | **N/A** | **N/A** | **363** (excludes T2b) | **2.544** (excludes G3) | 14 calls (excludes G3, T2b) | M |
 
 Average per Diagnose run (three runs: 0.830, 1.171, 0.494): **0.832 USD and 96 s** (M). Per layer, if split evenly across the three layers: about 0.33 USD.
 
@@ -32,3 +34,6 @@ Average per Diagnose run (three runs: 0.830, 1.171, 0.494): **0.832 USD and 96 s
 ## Notes
 - Cost figures are the CLI's own session cost, not an IBM invoice. Check against IBM's usage record before quoting them externally.
 - Rotate the demo key after the demo. It is visible in Bob's own process environment, and Bob runs as root with a shell.
+
+## Guarded path: cost is not recorded (found in T2)
+The adapter returns `cost`, but `witness/guard/guard.js` builds the stored narrative without it (lines 81 to 83). Spend on the guarded path therefore appears in no report, no ledger event and no run record. Only the per-call cap (`--max-cost 0.3`) bounds it. Needs a code change and your approval.
