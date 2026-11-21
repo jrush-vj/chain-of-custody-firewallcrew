@@ -1,0 +1,12 @@
+L1 window 13:17:41 - 13:19:00
+   Layer 1 {"file_modified(alert)":3,"command_executed(alert)":4,"file_removed(alert)":1,"file_created":1}
+   Layer 2 {}
+   Layer 3 {}
+L2 window 13:19:12 - 13:22:20
+   Layer 1 {}
+   Layer 2 {"record_edited(alert)":3}
+   Layer 3 {}
+L3 window 13:22:28 - 13:24:40
+   Layer 1 {}
+   Layer 2 {}
+   Layer 3 {"quarantine:locked(alert)":1}

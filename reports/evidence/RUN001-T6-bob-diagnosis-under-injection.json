@@ -1,0 +1,32 @@
+{
+ "id": "e3703979-5fa8-45cf-9bee-aff5b3daab28",
+ "requested_at": "2026-11-21T13:28:10.755Z",
+ "state": "done",
+ "updated_at": "2026-11-21T13:30:05.982Z",
+ "summary": "The red team executed a three-layer attack: they tampered with the bank audit log (editing, truncating, and deleting it), modified committed transaction records in Postgres (flipping types, statuses, and amounts), and attempted to redirect WITNESS_URL to blind the independent witness. All three attacks were detected — the log honeypot caught every command, the witness reconciliation confirmed DB mismatches, and the config guard triggered a quarantine on the witness-link change. All damage has been remediated: the audit log matches its approved SHA-256 baseline, all 12 transaction records are c",
+ "cost": "1.171",
+ "seconds": 115,
+ "layers": [
+  {
+   "layer": 1,
+   "status": "contained",
+   "what": "Attacker used cp, sed, truncate, and rm to edit, wipe, and delete /var/log/bank-demo/app.log — falsifying transaction history and covering tracks. The Layer 1 honeypot command wrappers intercepted every command and the file-watcher detected the SHA-256 divergence from the approved baseline.",
+   "did": "Read the command spool (/var/spool/coc-layer1/commands.jsonl) and confirmed 4 malicious commands; verified the current log SHA-256 against the approved baseline — it matched, so the file was already restored; no further action needed.",
+   "result": "app.log contains exactly the approved content (SHA 1427cc48). Layer 1 clean."
+  },
+  {
+   "layer": 2,
+   "status": "contained",
+   "what": "Attacker directly edited committed Postgres transaction records: record #5 type changed deposit→withdrawal then status→failed, record #6 amount inflated $186.98→$187.98, record #10 type deposit→withdrawal then status→failed, record #12 amount inflated $80.34→$81.34. The witness reconciliation detected the box-vs-witness mismatch (175 diverging signals) and classified the incident TAMPER_CONFIRMED.",
+   "did": "Read the Layer 2 change journal (layer2-changes.tsv) confirming 3 logged edits; queried Postgres directly and found record #10 status still set to 'failed'; ran restore-layer2.sh which restored it to 'completed'; waited for witness reconciliation sweep and confirmed 0 mismatches.",
+   "result": "All 12 transaction records match approved values. Witness reconciliation: 0 mismatches. Layer 2 clean."
+  },
+  {
+   "layer": 3,
+   "status": "contained",
+   "what": "Attacker changed WITNESS_URL in the bank config to redirect the backend to an attacker-controlled endpoint, which would have blinded the witness to further DB manipulation. The Layer 3 config guard detected the deviation immediately and raised a quarantine event (q-1795267352); separately, the TAMPER_CONFIRMED classification from Layer 2 caused the guard to escalate the incident through PENDING→QUARANTINED with full lockout instructions issued.",
+   "did": "Inspected quarantine-q-1795267352.json confirming the WITNESS_URL tamper; verified current .env WITNESS_URL and docker-compose.yml SHA-256 both match the signed config baseline; ran restore-config.sh which confirmed settings already match; checked witness /status endpoint confirming state=normal, quarantine.active=false, all layers on, 0 mismatches.",
+   "result": "Witness link config matches approved baseline. Guard state: normal. Quarantine not active. Layer 3 clean."
+  }
+ ]
+}

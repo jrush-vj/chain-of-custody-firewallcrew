@@ -1,0 +1,32 @@
+{
+ "id": "163bff47-b658-4957-aa54-756b8815f658",
+ "requested_at": "2026-11-21T13:25:30.226Z",
+ "state": "done",
+ "updated_at": "2026-11-21T13:27:05.261Z",
+ "summary": "The red team attacked all three layers: they tampered with the bank log file (edit, inject, wipe, delete), modified three transaction records in the database (flipping a deposit to a withdrawal, inflating an amount, and failing a real transaction), and attempted to redirect the witness link to break the tamper-detection chain. All attacks were caught in real time by the honeypot wrappers, the witness reconciliation sweeps, and the config guard. Restore scripts were run on all layers; the witness reports zero mismatches, the log is back to its approved content, and the guard is in normal state.",
+ "cost": "0.830",
+ "seconds": 93,
+ "layers": [
+  {
+   "layer": 1,
+   "status": "contained",
+   "what": "Attacker used cp, sed, truncate, and rm against /var/log/bank-demo/app.log — editing a log line, injecting a fake transaction entry, wiping the file, then deleting it. Every command was intercepted by the honeypot wrappers and logged to the command spool, and each file change triggered a hash-mismatch alert against the approved baseline.",
+   "did": "Read /var/spool/coc-layer1/commands.jsonl and confirmed 4 malicious commands (cp, sed, truncate, rm). Checked current log content. Ran deploy/ct105/layer1/restore-layer1.sh to rewrite the file from the approved baseline. Verified file content matches approved SHA256.",
+   "result": "app.log contains exactly 'txn 1 ok\\ntxn 2 ok' — approved content restored and verified."
+  },
+  {
+   "layer": 2,
+   "status": "contained",
+   "what": "Attacker directly updated three transaction fields in Postgres: txn #12 amount raised by $1 (80.34→81.34), txn #10 type flipped from deposit to withdrawal, txn #10 status changed from completed to failed. The witness detected each change within seconds during its reconciliation sweep and logged them to the layer2-changes.tsv journal.",
+   "did": "Read /var/lib/coc-demo/layer2-changes.tsv and confirmed 3 journal entries. Queried live DB and found txn #10 status was still 'failed'. Ran deploy/ct105/layer2/restore-layer2.sh which reversed the remaining dirty row. Waited for the witness reconciliation sweep and confirmed GET /mismatches returns zero mismatches.",
+   "result": "All 12 transaction records match the witness ledger. Zero mismatches confirmed."
+  },
+  {
+   "layer": 3,
+   "status": "contained",
+   "what": "Attacker changed WITNESS_URL in the bank's environment config to redirect the backend away from the real witness, attempting to silently bypass tamper detection. The Layer 3 config guard detected the change immediately and fired a quarantine. Separately, after Layer 2 confirmed database tampering, the guard escalated to TAMPER_CONFIRMED and auto-quarantined (dry-run in demo mode — no real lockout occurred).",
+   "did": "Inspected /var/lib/coc-layer3/config-baseline.json for approved WITNESS_URL. Verified current .env WITNESS_URL matches approved value. Verified docker-compose.yml SHA256 matches approved hash. Ran deploy/ct105/layer3/restore-config.sh which confirmed settings were already clean. Confirmed witness status shows state=normal, connection=connected.",
+   "result": "Witness link intact with approved settings. Guard in normal state. No active quarantine."
+  }
+ ]
+}
