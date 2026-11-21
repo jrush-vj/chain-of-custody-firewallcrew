@@ -40,3 +40,6 @@ monitor.env
 # Local tool output
 .playwright-mcp/
 .impeccable/
+
+# Local Bob run records (prompts and raw output; Bob has root, so these may hold secrets)
+deploy/local/bob/runs/

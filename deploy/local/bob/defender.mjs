@@ -18,7 +18,7 @@
  */
 import { spawn } from 'node:child_process';
 import { createHmac } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -80,6 +80,37 @@ export function parseDiagnosis(text) {
     };
   } catch {
     return null;
+  }
+}
+
+// Only events from the last EVIDENCE_WINDOW_MIN minutes go to Bob. The witness ledger outlives a demo, and older
+// incidents (another session, another branch) were being retold as part of the current one. Alerts are the
+// unresolved ones and mismatches are the current ones, so both are kept whole.
+const EVIDENCE_WINDOW_MIN = Number(process.env.BOB_EVIDENCE_WINDOW_MIN) || 30;
+export function scopeEvidence(evidence, nowMs = Date.now(), windowMin = EVIDENCE_WINDOW_MIN) {
+  const cutoff = nowMs / 1000 - windowMin * 60;
+  return { ...evidence, layer_events: evidence.layer_events.filter((e) => Number(e.time) >= cutoff) };
+}
+
+// A "Diagnose" request nobody picked up (defender was off) must not start a paid run much later.
+const REQUEST_TTL_MIN = Number(process.env.BOB_REQUEST_TTL_MIN) || 5;
+export const isStale = (requestedAt, nowMs = Date.now(), ttlMin = REQUEST_TTL_MIN) => {
+  const t = Date.parse(requestedAt);
+  return !Number.isFinite(t) || nowMs - t > ttlMin * 60_000;
+};
+
+// Local audit record of every Bob run: prompt, Bob's own final answer, cost and the CLI's full stats (which
+// carry token counts when Bob reports them). The witness keeps none of this. Files stay on this machine
+// (deploy/local/bob/runs/ is gitignored): Bob has root, so its output could hold secrets. Never commit them.
+export function recordRun(kind, prompt, run, seconds, dir = path.join(here, 'runs')) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    writeFileSync(path.join(dir, `${stamp}-${kind}.json`), JSON.stringify({
+      kind, at: new Date().toISOString(), seconds, cost: run.cost ?? null, ok: run.ok, stats: run.stats ?? null,
+      prompt, output: run.text }, null, 2));
+  } catch (error) {
+    console.error(`could not write the run record: ${error.message}`);
   }
 }
 
@@ -172,7 +203,7 @@ function runBob(text, { maxCost = MAX_COST, maxTurns = MAX_TURNS, resume } = {})
       try {
         const r = JSON.parse(line);
         resolve({ text: r.last_message || r.error || '', cost: r.stats?.session_costs, ok: r.status === 'success',
-          taskId: r.stats?.task_id });
+          taskId: r.stats?.task_id, stats: r.stats });
       } catch {
         resolve({ text: out.slice(-2000) || 'Bob produced no output', ok: false });
       }
@@ -220,7 +251,8 @@ async function gatherEvidence() {
   const get = async (p) => (await fetch(WITNESS + p, { cache: 'no-store' })).json();
   const [{ alerts }, { events }, { mismatches }] = await Promise.all([get('/alerts'), get('/timeline'), get('/mismatches')]);
   const noise = (e) => /^(bob|transaction):/.test(String(e.trigger));  // Bob's own notes, routine payments
-  return { alerts: alerts.slice(-40), layer_events: events.filter((e) => !noise(e)).slice(-40), mismatches: mismatches.slice(-20) };
+  return scopeEvidence({ alerts: alerts.slice(-40), layer_events: events.filter((e) => !noise(e)).slice(-40),
+    mismatches: mismatches.slice(-20) });
 }
 
 let diagnosing = false;
@@ -235,13 +267,16 @@ async function diagnose(id) {
         summary: `Bob's hourly run limit (${MAX_RUNS_PER_HOUR}) is reached; try again later.` });
       return;
     }
-    const run = await runBob(diagnosisPrompt(await gatherEvidence()), { maxTurns: process.env.BOB_MAX_TURNS || '45' });
+    const askedWith = diagnosisPrompt(await gatherEvidence());
+    const run = await runBob(askedWith, { maxTurns: process.env.BOB_MAX_TURNS || '45' });
+    recordRun('diagnosis', askedWith, run, Math.round((Date.now() - t0) / 1000));
     let report = parseDiagnosis(run.text);
     let cost = run.cost ?? 0;
     if (!report && run.taskId) {
       // Out of turns or no JSON line: one short follow-up on the same task for the walkthrough only.
-      const more = await runBob('Stop working now. Reply with ONLY the one-line JSON walkthrough described in the task, nothing else.',
-        { maxCost: '0.3', maxTurns: '2', resume: run.taskId });
+      const followUp = 'Stop working now. Reply with ONLY the one-line JSON walkthrough described in the task, nothing else.';
+      const more = await runBob(followUp, { maxCost: '0.3', maxTurns: '2', resume: run.taskId });
+      recordRun('diagnosis-followup', followUp, more, Math.round((Date.now() - t0) / 1000));
       report = parseDiagnosis(more.text);
       cost += more.cost ?? 0;
     }
@@ -270,7 +305,9 @@ async function defend(layer, alerts) {
     await postEvent(bobEvent(layer, 'bob:investigating',
       { status: 'investigating', summary: `IBM Bob is investigating: ${first}`, what: first, did: '', result: '' }));
     const t0 = Date.now();
-    const run = await runBob(prompt(layer, alerts));
+    const askedWith = prompt(layer, alerts);
+    const run = await runBob(askedWith);
+    recordRun(`layer${layer}`, askedWith, run, Math.round((Date.now() - t0) / 1000));
     let report = parseReport(run.text);
     if (report.status === 'reported' && run.taskId) {
       // Out of turns or no JSON line: one short follow-up on the same task for the report only.
@@ -301,7 +338,12 @@ async function main() {
       if (!diagnosing) {
         const res = await signed('GET', '/v1/diagnose-pending');
         const { pending } = res.ok ? await res.json() : {};
-        if (pending) diagnose(pending.id);
+        if (pending && isStale(pending.requested_at)) {
+          // Asked for while no defender was running: close it without spending anything.
+          console.error(`[diagnosis] request ${pending.id} is older than ${REQUEST_TTL_MIN} min; expired without a run`);
+          await postSigned('/v1/diagnose-report', { id: pending.id, state: 'failed',
+            summary: `This request waited more than ${REQUEST_TTL_MIN} minutes for a defender and expired. Press the button again.` });
+        } else if (pending) diagnose(pending.id);
       }
     } catch (error) {
       console.error(`diagnose poll failed: ${error.message}`);
