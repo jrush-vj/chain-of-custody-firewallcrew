@@ -267,7 +267,7 @@ must not be replaced with a reset or forced update. No Cloudflare Tunnel
 change is needed when it already routes `witness.jrushvj.dev` to
 `127.0.0.1:8787`.
 
-On ct105, update the root checkout and its pinned cybersec submodule using the
+On ct105, update the root checkout using the
 existing deployment service; this dashboard-only release does not require a
 banking container rebuild. Follow [`../deploy/ct105/README.md`](../deploy/ct105/README.md)
 for the safe update commands. Do not recreate or delete the PostgreSQL volume.

@@ -109,8 +109,7 @@ curl --fail https://witness.jrushvj.dev/health
 
 If the initial status check shows local changes, do not pull over them; inspect
 and preserve them first. The deployment service will rebuild the banking
-stack only if `banking-system/` changed, and the submodule update checks out
-the exact cybersec commit recorded by the root repository. Do not run `docker
+stack only if `banking-system/` changed. Do not run `docker
 compose down`, remove volumes, or rebuild PostgreSQL for an Oracle dashboard
 change.
 

@@ -11,6 +11,31 @@ See [`banking-system/README.md`](./banking-system/README.md) for application
 setup. Configure secrets in `banking-system/.env` before starting the app.
 Never commit `.env` or real credentials.
 
+## Run the demo locally
+
+Banking app (`banking-system/`, uses PostgreSQL from its `.env`):
+
+```bash
+cd banking-system
+npm install
+npm start
+```
+
+Witness (`witness/`, Node, no database):
+
+```bash
+cd witness
+npm install
+npm test     # 33 tests
+npm start    # auditor view at http://localhost:8787/
+```
+
+`WITNESS_PORT` changes the witness port (default 8787). The banking backend
+reads `PORT` from `banking-system/.env` (default 5000). Layer 1 and Layer 3 are
+not active in this repo; see the Cybersec section below. Demo recordings are
+listed in [`Videos/LINK.md`](./Videos/LINK.md); the video files are not stored
+in git.
+
 ## Existing Cloudflare Tunnel
 
 The `bank.jrushvj.dev` Cloudflare Tunnel configuration on ct105-ai should
@@ -62,15 +87,8 @@ integration.
 ## Cybersec detection project
 
 The upstream [`JeevikaS-19/cybersec`](https://github.com/JeevikaS-19/cybersec)
-repository is linked as the [`cybersec/`](./cybersec/) Git submodule. Initialize
-it after cloning with:
-
-```bash
-git submodule update --init --recursive
-```
-
-The Cybersec submodule remains pinned to upstream revision `73cfe0c` and is
-not modified. The Node witness serves the integration-owned `witness/auditor.html`
+repository is not included in this repo. It was a Git submodule pinned to
+`73cfe0c`; that submodule has been removed. The Node witness serves the integration-owned `witness/auditor.html`
 page (including its existing "Restore to normal" control) and compatible live API
 routes on the existing `127.0.0.1:8787` service. The dashboard's Layer 2
 live result is the existing comparison between committed witness events and
