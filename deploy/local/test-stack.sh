@@ -71,7 +71,8 @@ cmd_test() { say "end-to-end component checks"; node "$here/e2e.mjs" "$env_file"
 
 cmd_unit() {
   say "witness unit tests (node:18)"
-  docker run --rm -v "$repo/witness:/w:ro" -w /w node:18-alpine node --test --test-reporter=spec 2>&1 \
+  # The whole repo is mounted (read-only): the guard tests read deploy/ct105/guard/injection-payloads.txt.
+  docker run --rm -v "$repo:/r:ro" -w /r/witness node:18-alpine node --test --test-reporter=spec 2>&1 \
     | grep -E '^ℹ (tests|pass|fail)|✖' || true
   say "Layer 1/2/3 and traffic simulator tests (python:3.12)"
   docker run --rm -v "$repo/deploy/ct105:/src:ro" python:3.12-alpine sh -c '
@@ -150,9 +151,31 @@ cmd_attack() {
   in_lab bash deploy/ct105/coc.sh attack "$@"
 }
 
+# Same path as the dashboard's "Restore to normal" button: the witness queues the request, the lab's monitor runs
+# restore-normal.sh and reports back, and only then does the witness clear its alerts and quarantine. Running
+# the script alone restores the files but leaves the witness showing the incident, so it is only the fallback.
 cmd_restore() {
-  say "restore-normal.sh (running inside coc-lab)"
-  in_lab bash deploy/ct105/restore-normal.sh
+  say "Restore to normal (queued on the witness, run by the lab's monitor)"
+  local code since
+  since="$(date +%s)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/v1/restore-request || echo 000)"
+  case "$code" in
+    202|409)
+      for _ in $(seq 1 24); do
+        if curl -s http://127.0.0.1:8787/activity | node -e '
+          let s = ""; process.stdin.on("data", (d) => s += d).on("end", () => {
+            const done = JSON.parse(s).activity.filter((a) => (a.kind === "restore_completed" || a.kind === "restore_failed") && a.time >= '"$since"');
+            const last = done.at(-1);
+            if (last) { console.log(last.kind + ": " + last.detail); process.exit(0); }
+            process.exit(1); })' ; then return 0; fi
+        sleep 5
+      done
+      echo "the witness queued the restore but the lab did not finish it in 2 minutes: check test-stack.sh lab-logs"; return 1 ;;
+    *)
+      echo "witness did not queue a restore (HTTP $code: rate limited to one per minute, or not reachable)."
+      echo "Running restore-normal.sh directly. The files are restored, but the witness is NOT told, so its alerts stay open."
+      in_lab bash deploy/ct105/restore-normal.sh ;;
+  esac
 }
 
 cmd_lab_shell() { docker exec -it coc-lab bash /opt/chain-of-custody/deploy/local/lab/run.sh bash; }
