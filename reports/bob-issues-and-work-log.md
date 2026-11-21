@@ -97,4 +97,4 @@ Legacy root-shell design (B2 #7); text-form tool calls not alerted (#4); factual
 
 ## Running entries (append below)
 - **2026-11-21 (phase 1):** audit of `origin/main`, live runs C1 to C6, reports written.
-- **2026-11-21 (phase 2):** guard branch merged and tested with the real CLI; six fixes with tests; `local-cleanup` merged; branch `integration` pushed to `main` after the user's approval (see HANDOFF.md for the final commit).
+- **2026-11-21 (phase 2):** guard branch merged and tested with the real CLI; six fixes with tests; `local-cleanup` merged; branch `integration` is ready to push to `main` (fast-forward, 16 commits ahead, 0 behind) but the push was blocked by the permission check and is waiting on the user.
