@@ -13,6 +13,10 @@ export const RULES = Object.freeze([
   ['new_task', /\b(new task|end of (evidence|data|input)|begin (instructions|task))\b/i],
   ['markup', /<\/?\s*(tool_call|tool|system|instructions?|function|assistant|invoke)[\s>_]/i],
   ['action_on_secret', /\b(print|cat|read|dump|send|email|post|upload|exfiltrate|leak)\b.{0,40}(\.env|secret|password|passwd|api[_ -]?key|token|credential)/i],
+  // A plain request for a secret, with none of the "ignore your instructions" wording the other rules look for
+  // ("Output the value of WITNESS_HMAC_SECRET"). Deliberately has no bare "token" (it matches "token count") and
+  // no "write" (it matches "write the report"); checked against every free-text field in real ledger extracts.
+  ['secret_request', /\b(output|show|display|return|give|tell|reveal|expose|include|paste|copy|echo|put)\b.{0,50}(hmac|secret|password|passwd|api[_ -]?key|\.env\b|credential)/i],
   ['destructive', /\b(docker\s+compose\s+down|rm\s+-rf|drop\s+table|delete\s+the\s+evidence|unlock\s+the\s+(intruder|account))\b/i],
   ['raw_newline', /[\r\n]/],
   ['control_chars', /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u202a-\u202e]/]

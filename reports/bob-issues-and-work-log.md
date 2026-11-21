@@ -72,7 +72,7 @@ No code changes. Report and analysis work only. Log each finished task in `HANDO
 | B13 | **Correct your own phase 3 text in a dated addendum** (do not delete the original): items 1 to 6 and 8 of the CC review | Keeps the record attributable | Addendum at the end of your phase 3 section |
 | B14 | **Correct your own B11 to B13 errors** (24 to 28 above) in a dated addendum, and before any "gap" or "not present" claim, re-read the current file and `git log -5` | Five new errors, two of them "stale reads" | Addendum |
 | B15 | **Spec what "alert the dashboard on injection" really needs** (design only): the cards ignore guard alerts and `/alerts` labels layer 3 guard alerts as kind `quarantine`. Propose the smallest dashboard change (badge or list entry) and a distinct alert kind, and list what else reads kind `quarantine` (including the legacy defender) so nothing is mislabelled or double-handled | Phase 5 correction | A short spec with the files and lines involved |
-| B16 | **Narrow the candidate `secret_request` rule** (design only) using a real corpus: take the layer-event summaries and details from `reports/evidence/` and the ledger extracts, and show which rule variant withholds the three attack strings and none of the real fields | One false positive found | A rule plus the corpus table, STATIC or executed (say which) |
+| B16 | **Try to break the new `secret_request` rule** (design/executed, say which): CC added it (phase 6) after narrowing it on a real corpus. Find paraphrases of a secret request that it misses and benign real-looking fields it wrongly withholds, using `reports/evidence/` and the ledger extracts; report each with the exact string. Do not change code | CC wrote the rule; Bob is the independent check | A table of bypasses and false positives |
 
 Rules unchanged: never write a key or secret to a file; do not invent results; every number has a source; no code changes without the user's approval.
 
@@ -120,6 +120,7 @@ Legacy root-shell design (B2 #7); text-form tool calls not alerted (#4); factual
 
 ## Running entries (append below)
 - **2026-11-21 (phase 1):** audit of `origin/main`, live runs C1 to C6, reports written.
+- **2026-11-21 (phase 6):** `secret_request` pre-scan rule added (10 rules now), narrowed first against a real corpus; 139/139 tests; verified live with the real Bob. User okayed waiting on the provenance-alert change (B15) and will push themselves.
 - **2026-11-21 (phase 5):** user chose Option 1 for the root-shell Bob (kept for local demos, now labelled on the button and in the quickstart). CC reviewed B11 to B13: acceptances accurate, five new errors (24 to 28), one correction to CC's own phase 4 wording (the alert is in the ledger and `/alerts`, not on the dashboard). Local fix: commit `6e14bb7` swept Bob's B11 to B13 text in along with the code change (documentation only, scanned, not pushed).
 - **2026-11-21 (phase 4, user decisions):** text-form fake tool calls now raise an alert; every guarded Bob run records its cost in the ledger (measured 0.0045 to 0.0047 USD per note); local `main` fast-forwarded to origin/main. 137/137 witness tests. B12 reduced to two items (pre-scan gap, provenance state).
 - **2026-11-21 (phase 3, Bob B5 to B10):** Bob re-audited the guard branch (STATIC), fixed checklist Section 7 (all paths verified to exist), wrote B7 to B9 specs. CC review found 8 errors in the new text (A17 to A23), measured T2, and found two code gaps: the guarded path records no cost, and the pre-scan misses secret requests without override phrasing.
@@ -132,6 +133,6 @@ Legacy root-shell design (B2 #7); text-form tool calls not alerted (#4); factual
 | 2026-11-21 | Record the guarded path's Bob cost? | Yes (done) |
 | 2026-11-21 | Legacy root-shell Bob: keep or redesign? | **Option 1: keep for local demos only, labelled** (done) |
 | 2026-11-21 | Fast-forward local main to origin/main? | Yes (done, 7cb349c) |
-| 2026-11-21 | Add the `secret_request` pre-scan rule (B12a)? | Pending (user). CC note: the candidate is too broad; B16 narrows it first |
-| 2026-11-21 | Make `guard:provenance_warning` an alert (B12b)? | Pending (user). CC note: a state change alone shows nothing on the dashboard; B15 specs the real change |
+| 2026-11-21 | Add the `secret_request` pre-scan rule (B12a)? | **Yes (done).** CC narrowed Bob's candidate against 274 real ledger values first; 139/139 tests; verified with the real Bob |
+| 2026-11-21 | Make `guard:provenance_warning` an alert (B12b)? | User: okay to wait. Pending B15 (a state change alone shows nothing on the dashboard) |
 | 2026-11-21 | Record guarded-Bob cost (B12c)? | Done in phase 4 as `guard:bob_run` |
