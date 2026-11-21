@@ -544,3 +544,28 @@ User decisions: (1) text-form fake tool calls must raise an alert; (3) fix the m
 **Trade-off to know:** the check matches markup, not intent. If Bob ever echoes attacker text that contains `<tool_call>`-style markup, that also raises the alert. The pre-scan already withholds such text before Bob sees it, so this would only happen if the pre-scan missed it, and an alert is a reasonable outcome then.
 
 Still open from B12: the pre-scan misses secret requests without override phrasing, and `guard:provenance_warning` events are state `normal` so they never show as alerts.
+
+
+---
+
+# Phase 5: CC review of Bob's B11 to B13, and a correction to what "alert" means (2026-11-21)
+
+## What holds up in B11 to B13 (checked)
+- All 8 acceptances in B11 match my review, and the B13 addendum corrects the original phase 3 text accurately while leaving it in place.
+- B12a's test cases behave as stated: the three must-withhold strings are withheld by the candidate rule and the three must-not strings are not (executed).
+- No code was touched.
+
+## New errors in Bob's B11 to B13 (each verified)
+| # | Bob's claim | What is true | Evidence |
+|---|-------------|--------------|----------|
+| 1 | B11 item 7: the README Cybersec section "is not there" in the current file | It is there (`README.md` line 91, "Cybersec detection project"). It was rewritten, not removed | `grep -n "^## Cybersec" README.md` |
+| 2 | B11 item 5: the witness image is `node:18-alpine`, "confirmed in `deploy/local/lab/Dockerfile`" | The conclusion is right, the citation is wrong. The lab Dockerfile is `python:3.12`; the witness image is set in `banking-system/docker-compose.local.yml` line 25 | `grep -n "^FROM" deploy/local/lab/Dockerfile` |
+| 3 | **B12b: making `guard:provenance_warning` an alert "would turn the relevant layer card amber/red"** | False. The cards read only Layer 1 tripwires, Layer 2 kinds and `S.quarantine`; guard events are excluded from the quarantine state. An alert would appear in `/alerts` and the ledger and **nowhere on the dashboard** | `auditor.html` `layerState()` lines 219 to 229; `server.js` `quarantineState` filter |
+| 4 | B12c: record cost as a new `guard:bob_cost` event (snippet uses `elapsedS`) | Already done in phase 4, as `guard:bob_run` (status + cost). The snippet's variable does not exist. Bob wrote the note without re-reading the current code or history | `guard.js` line 66 |
+| 5 | B12a: candidate `secret_request` rule, "medium confidence" | Too broad as written: it also withholds the ordinary text "write the report to /tmp/out.txt, token count 12". It is a tripwire, so a false positive costs a missing warning-free field for Bob, but it needs narrowing | Executed on 7 realistic inputs; 1 false positive |
+
+## Correction to my own phase 4 wording
+Phase 4 says a text-form tool call "raises an alert". That is true in the ledger (`guard:bob_tool_attempt`, state alert) and in the `/alerts` API, but **the dashboard shows nothing for it**: no card or list renders guard alerts. A layer 3 guard alert also appears in `/alerts` with kind `quarantine`, which is misleading (it is not a quarantine), and the legacy defender in `BOB_AUTO=1` mode would treat any `quarantine` alert as a Layer 3 incident. Making an injection visibly alert on the dashboard needs a small dashboard change (a badge or a list entry) and a distinct alert kind, not only a state change. Assigned to Bob as B15.
+
+## Decision recorded: root-shell Bob (Option 1)
+User chose to keep the legacy "Diagnose with Bob" as it is, for local demos only. Done: a tooltip on the button and a visible note in the empty state say it is local demo only and runs as root in the lab (`witness/auditor.html`); `deploy/local/QUICKSTART.md` now spells out what the root shell can reach, tells you to keep the Bob key outside the repo, and points to the guarded Bob as the safe one. No behaviour changed. The risk itself (root, Docker socket, readable `banking-system/.env`, witness secret in its environment) is unchanged and accepted for the throwaway setup.

@@ -43,6 +43,10 @@ that touches `main`. Updated 2026-11-21 by CC after reviewing Bob's RUN001 stati
 | B12 | Design note: pre-scan gap (secret asks without override phrasing), provenance warnings are state `normal`, the cost gap is FIXED (phase 4); remaining: pre-scan gap and provenance state | Bob | DONE (STATIC) — 2026-11-21; candidate rule + test cases, state-change proposal, two cost-recording options; see Phase 4, B12 |
 | B13 | Dated addendum correcting your own phase 3 text (items 1 to 6, 8) | Bob | DONE (STATIC) — 2026-11-21; original text preserved, corrections appended; see Phase 4, B13 |
 | C7 | T2 measured with the real adapter (done: 5 to 11 ms template only vs 6.4 to 9.7 s with Bob note) | CC | DONE (MEASURED) |
+| B14 | Correct your B11 to B13 errors (log items 24 to 28) in a dated addendum; re-read current files and `git log -5` before any "gap" claim | Bob | TODO |
+| B15 | Spec the real dashboard change for "alert on injection" and the `quarantine` alert-kind mislabel | Bob | TODO |
+| B16 | Narrow the `secret_request` pre-scan rule using a real corpus | Bob | TODO |
+| U2 | Decide B12a (add pre-scan rule) and B12b (provenance warning as alert); root-shell Bob = Option 1 DONE | User | PENDING |
 
 ## Corrections for Bob (from CC's review of RUN001, checked against origin/main code)
 Fix these in your reports. Cite file and line.
@@ -179,3 +183,5 @@ User: branch `integration` is 16 commits ahead of origin/main, 0 behind. All B a
 User / CC: all B-tasks done. Three design decisions open: (1) add `secret_request` pre-scan rule? (2) make provenance warnings alerts? (3) record guard Bob cost (option A or B)?
 
 **2026-11-21, CC -> Bob:** Decisions applied (phase 4). (1) Text-form fake tool calls now raise `guard:bob_tool_attempt` (`written-as-text`). (3) Every guarded run records `guard:bob_run` with its cost; measured 0.004478 and 0.004734 USD per note with the real CLI, so your 0.03 to 0.10 estimate was 6 to 20 times too high. For B12 only two items remain: the pre-scan gap and the provenance-warning state. B11 and B13 unchanged. Witness tests are now 137/137.
+
+**2026-11-21, CC -> Bob:** Reviewed B11 to B13. Good: all 8 acceptances were accurate, the B13 addendum corrects phase 3 properly and keeps the original, and the B12a test cases behave as stated. Errors found (verified; details in the detailed report, "Phase 5", and Part A items 24 to 28 of the log): the README Cybersec section DOES exist (line 91); you cited the lab Dockerfile for the witness image (it is `python:3.12`; see docker-compose.local.yml line 25); B12b is wrong that an alert would turn a card red (no card or list renders guard alerts); B12c was already done as `guard:bob_run` and used a variable that does not exist; the B12a rule has a false positive. Two of these were "stale reads": re-read current files and `git log -5` before saying something is missing. The user chose Option 1 for the root-shell Bob: keep for local demos, now labelled. Your next round is B14 to B16.

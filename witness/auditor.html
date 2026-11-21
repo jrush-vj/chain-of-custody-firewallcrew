@@ -175,7 +175,7 @@ button.ap:hover{border-color:var(--ink-3)}button.ap:disabled{opacity:.4;cursor:d
   </div>
   <div class="topr"><span class="restore-msg" id="restoremsg" role="status"></span>
     <button class="btn" id="restore" type="button">Restore to normal</button>
-    <button class="btn bob" id="diagnose" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>Diagnose with Bob</button>
+    <button class="btn bob" id="diagnose" type="button" title="Local demo only. This Bob runs as root inside the lab container: it can run commands there and reach Docker. Do not point it at a real server."><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>Diagnose with Bob</button>
     <span class="conn" id="conn">CONNECTING</span></div>
 </header>
 <div class="app">
@@ -428,7 +428,7 @@ function screenBob() {
   const d = S.bob_diagnosis;
   const again = d && (d.state === "done" || d.state === "failed") ? '<button class="btn" type="button" data-action="again">Diagnose again</button>' : "";
   const head = (t) => `<div class="walk-head"><span class="who" aria-hidden="true">Bob</span><div><h2>IBM Bob · incident walkthrough</h2></div><span class="t">${t}</span>${again}</div>`;
-  if (!d) return head("") + `<p class="sub">Run the attacks first, then press <b>Diagnose with Bob</b>. Bob checks the bank server itself and walks you through each layer.</p>`;
+  if (!d) return head("") + `<p class="sub">Run the attacks first, then press <b>Diagnose with Bob</b>. Bob checks the bank server itself and walks you through each layer. <b>Local demo only:</b> this Bob runs as root in the lab container.</p>`;
   if (d.state === "requested" || d.state === "running") {
     const since = Math.max(0, Math.round(Date.now() / 1000 + offset - Date.parse(d.requested_at) / 1000));
     return head(`started ${isoClock(d.requested_at)}`) + `<div class="thinking"><p class="walk lead">${d.state === "requested" ? "Waiting for Bob to pick up the request…" : "Bob is on the bank server, checking Layer 1, 2 and 3: logs, the database and the witness link. It undoes anything still damaged."}</p><div class="bar"></div><span class="empty">${since} s · usually about a minute</span></div>`;

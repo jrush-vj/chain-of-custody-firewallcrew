@@ -55,4 +55,12 @@ bash deploy/local/test-stack.sh down     # removes containers, data and the thro
 - `refusing: banking-system/.env exists`: you have a real `.env` there; move it away first.
 - Ports 3001, 3300, 8081 or 8787 already in use: stop whatever uses them.
 
-Bob runs with a root shell inside the lab and can reach Docker, so only use this throwaway setup.
+**Local demo only.** The "Diagnose with Bob" button runs Bob as root inside the lab container. It can run
+commands there, reach Docker, and read the throwaway `banking-system/.env` (including the witness signing
+secret). Nothing real is in this setup, so that is acceptable here; never point this Bob at a real server.
+Keep your Bob API key outside the repo (the lab mounts the whole repo), for example in
+`~/.coc-secrets/bob.env`, and rotate it after the demo.
+
+The safer Bob is the guarded one in `witness/guard/` (no tools, an empty workspace, nothing but its own
+key in its environment). It writes a short labelled note for an incident and is enabled with the guard
+settings in `witness/guard/README.md`.
