@@ -80,7 +80,12 @@ Bob only ever writes a labelled note for a human. It cannot approve, seal, quara
   workspace, with only `BOB_API_KEY` in its environment and no shell. The CLI silently ignores an unknown
   group name, so a test pins the exact list.
 - **Any tool-call attempt is a tamper event.** The stream output shows every `tool_use`; one is written to
-  the ledger as `guard:bob_tool_attempt` (an alert) and Bob's whole answer is discarded.
+  the ledger as `guard:bob_tool_attempt` (an alert) and Bob's whole answer is discarded. So is a call Bob
+  merely *writes out as text* (`<function_calls>`, `<invoke>`, `<tool_call>` and similar): with every tool
+  group disabled the model still invents a call and its output. Nothing ran, but it is recorded as an attempt
+  (tool name `written-as-text`).
+- **Every Bob run is costed.** One `guard:bob_run` ledger event per run, whatever its outcome (`status`, `cost`).
+  The CLI reports cost and no tokens, so cost is the only spend figure.
 - **Input is data, not instructions.** Attacker-controlled strings are pre-scanned. Instruction-like text is
   withheld (only its length and hash go in) and logged as `guard:provenance_warning` with the rules that hit,
   never the text. What remains is passed as one line of quoted JSON.

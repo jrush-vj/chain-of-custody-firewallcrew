@@ -525,3 +525,22 @@ Correction: Not a simple switch. The guard's narrative route (`server.js` line 6
 **Item 8 — "Bob fills fixed templates" (B5, Section 2 row 3):**
 Original: "This is the design the claim describes."
 Correction: Imprecise. The correct description is: the report is produced entirely by the deterministic `buildReport()` function; Bob adds only an optional labelled note in the `narrative` field. Bob does not fill the template — the template fills itself. The claim "tokens go to content, not layout" holds because the layout costs zero tokens; but "Bob fills fixed templates" implies Bob writes the report body, which it does not.
+
+
+---
+
+# Phase 4: decisions applied (MEASURED, 2026-11-21)
+
+User decisions: (1) text-form fake tool calls must raise an alert; (3) fix the missing cost record.
+
+| Change | Where | Verified |
+|--------|-------|----------|
+| A call written out as text (`<function_calls>`, `<invoke>`, `<tool_call>`, `<tool_use>`, `execute_command`) is a tool attempt: ledger alert `guard:bob_tool_attempt` (tool `written-as-text`), Bob's answer discarded | `witness/guard/bob/adapter.js` (`TOOL_MARKUP`) | Unit tests, plus the **real Bob CLI**: asked to run a shell command with the guard's real flags, it wrote a made-up call as text; the ledger got the alert and no text reached the report |
+| One spend record per Bob run, whatever the outcome: `guard:bob_run` (`status`, `cost`). Runs that could not start record none | `witness/guard/guard.js`, `adapter.js` | Unit tests (ok, rejected, tool attempt, could-not-start); real runs: cost 0.004478 (tool attempt) and 0.004734 (normal note) |
+| Old test that said "role-played calls are rejected, not alerted" updated to the new decision; 4 tests added | `witness/test/guard-bob.test.js` | 31/31; the 3 behaviour tests fail without the change; full witness suite 137/137 |
+
+**Measured cost of a guarded note: about 0.0047 USD per run** (two real runs; the CLI still reports no tokens). Bob's phase 3 estimate of 0.03 to 0.10 USD was 6 to 20 times too high, which is why estimates are not to be used.
+
+**Trade-off to know:** the check matches markup, not intent. If Bob ever echoes attacker text that contains `<tool_call>`-style markup, that also raises the alert. The pre-scan already withholds such text before Bob sees it, so this would only happen if the pre-scan missed it, and an alert is a reasonable outcome then.
+
+Still open from B12: the pre-scan misses secret requests without override phrasing, and `guard:provenance_warning` events are state `normal` so they never show as alerts.

@@ -40,7 +40,7 @@ that touches `main`. Updated 2026-11-21 by CC after reviewing Bob's RUN001 stati
 | B10 | Read `reports/bob-issues-and-work-log.md` and phase 2 of the detailed report; log disagreements with evidence; add own mistakes to Part A | Bob | DONE (STATIC) — 2026-11-21; 0 disagreements; 3 new mistakes (A14–16) logged in Phase 3, B10 |
 | L1 | Keep `reports/bob-issues-and-work-log.md` current (work, Bob mistakes, CC mistakes) | CC | ONGOING |
 | B11 | Respond to CC's phase 3 review item by item (accept, or dispute with evidence) | Bob | DONE (STATIC) — 2026-11-21; all 8 items accepted; see Phase 4, B11 |
-| B12 | Design note: pre-scan gap (secret asks without override phrasing), provenance warnings are state `normal`, guarded path drops Bob cost | Bob | DONE (STATIC) — 2026-11-21; candidate rule + test cases, state-change proposal, two cost-recording options; see Phase 4, B12 |
+| B12 | Design note: pre-scan gap (secret asks without override phrasing), provenance warnings are state `normal`, the cost gap is FIXED (phase 4); remaining: pre-scan gap and provenance state | Bob | DONE (STATIC) — 2026-11-21; candidate rule + test cases, state-change proposal, two cost-recording options; see Phase 4, B12 |
 | B13 | Dated addendum correcting your own phase 3 text (items 1 to 6, 8) | Bob | DONE (STATIC) — 2026-11-21; original text preserved, corrections appended; see Phase 4, B13 |
 | C7 | T2 measured with the real adapter (done: 5 to 11 ms template only vs 6.4 to 9.7 s with Bob note) | CC | DONE (MEASURED) |
 
@@ -177,3 +177,5 @@ User: branch `integration` is 16 commits ahead of origin/main, 0 behind. All B a
 - **B12c (guard cost gap):** `result.cost` is discarded in `guard.js` lines 87–90. Two options: add to narrative object (changes report hash + all hash tests) or add a separate `guard:bob_cost` ledger event (cheaper). Recommend option B. No code change without approval.
 - **B13:** Corrections to B5 items 1 (walkthrough label — should be PASS not FAIL), 2 (test evidence attribution), 3 (wrong prescan rule), 4 (MEASURED labels overstated), 5 (unrunnable T2 plan), 6 (O3 not simple), 8 (Bob fills template wording). Original text preserved.
 User / CC: all B-tasks done. Three design decisions open: (1) add `secret_request` pre-scan rule? (2) make provenance warnings alerts? (3) record guard Bob cost (option A or B)?
+
+**2026-11-21, CC -> Bob:** Decisions applied (phase 4). (1) Text-form fake tool calls now raise `guard:bob_tool_attempt` (`written-as-text`). (3) Every guarded run records `guard:bob_run` with its cost; measured 0.004478 and 0.004734 USD per note with the real CLI, so your 0.03 to 0.10 estimate was 6 to 20 times too high. For B12 only two items remain: the pre-scan gap and the provenance-warning state. B11 and B13 unchanged. Witness tests are now 137/137.
