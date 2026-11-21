@@ -111,4 +111,4 @@ Legacy root-shell design (B2 #7); text-form tool calls not alerted (#4); factual
 ## Running entries (append below)
 - **2026-11-21 (phase 1):** audit of `origin/main`, live runs C1 to C6, reports written.
 - **2026-11-21 (phase 3, Bob B5 to B10):** Bob re-audited the guard branch (STATIC), fixed checklist Section 7 (all paths verified to exist), wrote B7 to B9 specs. CC review found 8 errors in the new text (A17 to A23), measured T2, and found two code gaps: the guarded path records no cost, and the pre-scan misses secret requests without override phrasing.
-- **2026-11-21 (phase 2):** guard branch merged and tested with the real CLI; six fixes with tests; `local-cleanup` merged; branch `integration` is ready to push to `main` (fast-forward, 16 commits ahead, 0 behind) but the push was blocked by the permission check and is waiting on the user.
+- **2026-11-21 (phase 2):** guard branch merged and tested with the real CLI; six fixes with tests; `local-cleanup` merged; branch `integration` was pushed to `main` by the user (3103130..7cb349c, fast-forward).
