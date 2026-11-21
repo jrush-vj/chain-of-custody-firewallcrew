@@ -102,15 +102,24 @@ The upstream repository has no license file. Obtain permission/license
 confirmation before redistributing the integrated upstream UI outside this
 project.
 
-The Cybersec agent expects a different SQLite schema and is not connected to
-the banking PostgreSQL database. Its Layer 1 command tripwire, separate
-heartbeat/checksum agent, balance replay, and Layer 3 quarantine are not
-active here. Their preview buttons are simulated examples only. The live
-dashboard marks these features as unavailable; bank-source outages are
-reported as unknown/unavailable, not as tampering. Layer 3 approval is
-disabled and dry-run guarded. No new service, daemon, hostname, or port is
-required; preserve the existing Node `/health` and `/v1/prepare|commit|abort`
-interfaces, ledger, Cloudflare routing, and banking services.
+The upstream Cybersec agent itself is not used here: it expects a different
+SQLite schema and is not connected to the banking PostgreSQL database. Its
+detections are re-implemented for this bank in this repository and are active
+(in the lab container started by `deploy/local/test-stack.sh`, and on ct105):
+
+- **Layer 1**, the command tripwire and file watcher: `deploy/ct105/layer1/monitor.py`.
+- **Layer 2**, the read-only bank reader and the witness's reconciliation of
+  committed records: `deploy/ct105/layer2/` and `witness/`.
+- **Layer 3**, quarantine on a changed witness link: `deploy/ct105/layer3/`. It is
+  a dry run by default (it records the response and executes none of it). The
+  full lockout is built but not enabled; see `deploy/ct105/layer3/RECOVERY.md`.
+- **Guard** (off unless `GUARD_ENABLED=1`): alarm classification, soft
+  containment with human approval, and incident reports. See `witness/guard/README.md`.
+
+Bank-source outages are reported as unknown/unavailable, not as tampering. No new
+service, daemon, hostname, or port is required; preserve the existing Node
+`/health` and `/v1/prepare|commit|abort` interfaces, ledger, Cloudflare routing,
+and banking services.
 
 See [`witness/README.md`](./witness/README.md) for the live routes, deployment
 update steps, and integration limits.
