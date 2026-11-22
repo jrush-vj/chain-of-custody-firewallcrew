@@ -1090,3 +1090,22 @@ test('"Diagnose with Bob" refuses other origins and frees the button after a sta
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('/alerts labels guard events guard_alert, not quarantine; a real quarantine keeps its kind', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'coc-witness-guardkind-'));
+  const store = new WitnessStore(path.join(directory, 'ledger.jsonl'));
+  await store.initialize();
+  const server = createWitnessServer(store);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    await store.recordLayerEvent({ layer: 3, trigger: 'guard:provenance_warning', state: 'alert', summary: 'guard: instruction-like text withheld from Bob', detail: {}, who: {} });
+    await store.recordLayerEvent({ layer: 3, trigger: 'quarantine:locked', state: 'alert', summary: 'dry run lockout', detail: { dry_run: true }, who: {} });
+    const { alerts } = await (await fetch(`http://127.0.0.1:${server.address().port}/alerts`)).json();
+    assert.equal(alerts.find((a) => a.ref === 'guard:provenance_warning').kind, 'guard_alert');
+    assert.equal(alerts.find((a) => a.ref === 'quarantine:locked').kind, 'quarantine');
+  } finally {
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await rm(directory, { recursive: true, force: true });
+  }
+});

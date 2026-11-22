@@ -115,6 +115,7 @@ pre.diff .add{color:var(--ok)}pre.diff .del{color:var(--bad)}
 .delta{font-size:12px;opacity:.9}
 .more{margin-top:16px}.more li{font-family:var(--mono);font-size:13px;margin:4px 0}
 .alist li{margin:6px 0}
+.gbanner{margin:0 0 14px;padding:10px 14px;border:1px solid #b7791f;background:rgba(183,121,31,.15);border-radius:6px;font-size:14px}
 .tt{font:600 10.5px var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:4px 6px;border-radius:4px;background:var(--bad-bg);color:var(--bad)}
 .quar{font-size:20px;font-weight:600;color:var(--bad);margin:0 0 12px}
 .ev{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -326,6 +327,11 @@ const recordsLine = () => {
   return `<p class="sub counts">Bank rows <b>${r.bank_rows}</b> · witness copies <b>${r.witness_copies}</b> · witnessed <b>${r.witnessed_events}</b> · last sync <b>${clock(r.last_sync_time)}</b> · ${r.in_sync ? '<span class="okc">in sync</span>' : `<span class="badc">${r.findings} open finding${r.findings === 1 ? "" : "s"}</span>`}</p>`;
 };
 
+const guardBanner = () => {
+  const g = alerts.filter((a) => a.kind === "guard_alert" && !a.resolved);
+  return g.length ? `<div class="gbanner" role="alert"><b>Guard alert:</b> ${g.length} event${g.length === 1 ? "" : "s"} (instruction-like text withheld from Bob, or Bob tried to call a tool). Latest: ${esc(g[g.length - 1].detail)} <span class="empty">${clock(g[g.length - 1].time)}</span></div>` : "";
+};
+
 function screen2() {
   const others = alerts.filter((a) => L2_KINDS.has(a.kind) && a.kind !== "record_mismatch" && !a.resolved);
   const otherList = others.length ? `<div class="more"><h3>Other Layer 2 alerts</h3><ul class="alist">${others.map((a) => `<li><span class="tt">${esc(a.tamper_type || a.kind)}</span> ${esc(a.detail)} <span class="empty">${clock(a.time)}</span></li>`).join("")}</ul></div>` : "";
@@ -454,7 +460,7 @@ function screenBob() {
 function renderMain() {
   if (!S) return;
   const html = view === "bob" ? screenBob()
-    : bobPanel() + (view === 1 ? screen1() : view === 2 ? screen2() : view === 3 ? screen3() : screen0());
+    : guardBanner() + bobPanel() + (view === 1 ? screen1() : view === 2 ? screen2() : view === 3 ? screen3() : screen0());
   if ($("main").dataset.html !== html) { $("main").innerHTML = html; $("main").dataset.html = html; }
 }
 

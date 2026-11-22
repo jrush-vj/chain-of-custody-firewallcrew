@@ -65,7 +65,7 @@ export const createGuard = (store, config = loadGuardConfig(), { bob: bobOverrid
       // Spend record: one per Bob run, whatever the outcome. cost is blank when the CLI reported none.
       entry = { trigger: 'guard:bob_run', state: 'normal', summary: 'guard: Bob run recorded', detail: { status: String(event.status), cost: event.cost === null ? '' : String(event.cost) } };
     } else {
-      entry = { trigger: 'guard:provenance_warning', state: 'normal', summary: 'guard: instruction-like text withheld from Bob', detail: { ref: event.ref, field: event.field, rule: event.rule, rules: (event.rules || [event.rule]).join(','), chars: String(event.chars) } };
+      entry = { trigger: 'guard:provenance_warning', state: 'alert', summary: 'guard: instruction-like text withheld from Bob', detail: { ref: event.ref, field: event.field, rule: event.rule, rules: (event.rules || [event.rule]).join(','), chars: String(event.chars) } };
     }
     store.recordLayerEvent({ layer: 3, ...entry, who: {} }).catch((error) => console.error('guard: could not record Bob event:', error.message));
   };
