@@ -1104,6 +1104,9 @@ test('/alerts labels guard events guard_alert, not quarantine; a real quarantine
     const { alerts } = await (await fetch(`http://127.0.0.1:${server.address().port}/alerts`)).json();
     assert.equal(alerts.find((a) => a.ref === 'guard:provenance_warning').kind, 'guard_alert');
     assert.equal(alerts.find((a) => a.ref === 'quarantine:locked').kind, 'quarantine');
+    await store.recordLayerEvent({ layer: 3, trigger: 'guard:fake', state: 'alert', summary: 'posted by the box', detail: {}, who: {}, origin: 'box' });
+    const again = (await (await fetch(`http://127.0.0.1:${server.address().port}/alerts`)).json()).alerts;
+    assert.equal(again.find((a) => a.ref === 'guard:fake').kind, 'quarantine', 'a box-posted guard: trigger is not shown as a guard alert');
   } finally {
     await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });

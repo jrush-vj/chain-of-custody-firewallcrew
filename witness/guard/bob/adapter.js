@@ -42,6 +42,7 @@ export const spawnBob = async (prompt, { env = process.env, bin = env.BOB_BIN ||
       const child = spawn(bin, [...binArgs, ...bobArgs({ workspace, prompt })], { cwd: workspace, env: cleanEnv(env), shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
       let out = '';
       const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+      child.stderr.on('data', () => {}); // drain it: an unread pipe fills up and stalls the CLI
       child.stdout.on('data', (chunk) => { out += chunk; if (out.length > 1_000_000) child.kill('SIGKILL'); });
       child.on('error', () => resolve({ events: [], failed: 'bob could not start' }));
       child.on('close', () => {
@@ -135,7 +136,7 @@ export const createBobAdapter = ({ config, run = spawnBob, env = process.env, on
     const countedCalls = Number(final && final.stats && final.stats.tool_calls) || 0;
     const writtenCall = TOOL_MARKUP.test(text);
     if (toolAttempts.length > 0 || countedCalls > 0 || writtenCall) {
-      const names = [...new Set(toolAttempts.map((event) => String(event.tool_name).replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40)))];
+      const names = [...new Set(toolAttempts.map((event) => String(event.tool_name ?? 'unknown').replace(/[^A-Za-z0-9_.-]/g, '').slice(0, 40)))];
       const count = Math.max(toolAttempts.length, countedCalls, 1);
       const shown = names.length ? names : [countedCalls > 0 ? 'unknown' : 'written-as-text'];
       onEvent({ type: 'tool_attempt', tools: shown, count });

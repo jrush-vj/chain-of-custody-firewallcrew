@@ -66,7 +66,7 @@ export const normalize = (raw) => {
     rejectedHeartbeats: count(heartbeats.rejectedRecent),
     boxClaims: (Array.isArray(input.boxClaims) ? input.boxClaims : [])
       .map((kind) => fromSet(kind, BOX_CLAIM_KINDS, null)).filter(Boolean).slice(0, 20),
-    outages: (Array.isArray(input.outages) ? input.outages : []).map(epoch).filter((t) => t !== null).slice(0, 200)
+    outages: (Array.isArray(input.outages) ? input.outages : []).map(epoch).filter((t) => t !== null).slice(-200)
   };
 };
 

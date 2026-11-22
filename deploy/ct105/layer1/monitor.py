@@ -478,12 +478,14 @@ def check_guard_decision(pending):
     except (urllib.error.URLError, OSError, ValueError) as error:
         log(f"guard decision check unavailable: {error}")
         return
-    if not order or order.get("action") != "quarantine" or order.get("id") in _guard_done:
+    if not order or order.get("action") != "quarantine":
         return
-    _guard_done.add(order["id"])
-    reason = str(order.get("reason") or "soft containment ordered a quarantine")[:200]
-    log(f"guard ordered a quarantine ({order['id']}): {reason}")
-    pending.append(respond_to_layer3(reason))
+    if order.get("id") not in _guard_done:
+        _guard_done.add(order["id"])
+        reason = str(order.get("reason") or "soft containment ordered a quarantine")[:200]
+        log(f"guard ordered a quarantine ({order['id']}): {reason}")
+        pending.append(respond_to_layer3(reason))
+    # The order is carried out once, but the acknowledgement is retried until the witness has it.
     body = json.dumps({"id": order["id"]}).encode("utf-8")
     try:
         with open_witness(signed_request("POST", "/v1/guard-ack", body), timeout=10):

@@ -167,7 +167,8 @@ export const createGuard = (store, config = loadGuardConfig(), { bob: bobOverrid
     machine.tick(nowS);
     // A reconnect check is a one-time observation: use it for this verdict only. Left in place, a reconnect that
     // was 'not clean' at the time would reopen a tamper incident on every later tick, even after it was resolved.
-    if (tracker.reconnect && tracker.reconnect.verified) tracker.reconnect = null;
+    if (tracker.reconnect && tracker.reconnect.verified) { tracker.reconnect = null; tracker.reconnectAt = null; }
+    if (tracker.outages.length > 200) tracker.outages.splice(0, tracker.outages.length - 200);
     // A quarantined incident closes when the quarantine is lifted by any existing route: the key-holder release
     // (quarantine:released) or "Restore to normal" (which resolves the box's quarantine:locked report). The box
     // must have reported its lock first, so the order is not mistaken for released before the box has acted.

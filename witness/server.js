@@ -188,7 +188,7 @@ const auditorAlerts = (store) => {
       continue;
     }
     alerts.push({
-      kind: record.layer === 1 ? 'layer1_tripwire' : record.layer === 3 ? (String(record.trigger).startsWith('guard:') ? 'guard_alert' : 'quarantine') : record.kind,
+      kind: record.layer === 1 ? 'layer1_tripwire' : record.layer === 3 ? (String(record.trigger).startsWith('guard:') && record.origin !== 'box' ? 'guard_alert' : 'quarantine') : record.kind,
       ref: record.trigger,
       tamper_type: record.trigger,
       detail: record.summary,

@@ -128,3 +128,9 @@ test('config: Bob is off by default and invalid values fail loudly', () => {
   assert.throws(() => loadGuardConfig({ FLAP_MAX: '0' }), /FLAP_MAX/);
   assert.throws(() => loadGuardConfig({ REPORT_NARRATIVE: 'always' }), /REPORT_NARRATIVE/);
 });
+
+test('flap detection keeps the NEWEST outages when there are more than 200', () => {
+  const old = Array.from({ length: 250 }, (_, i) => i);
+  const result = classify({ now: 100_000, silence: { active: true }, outages: [...old, 99_900, 99_950, 99_990] }, config);
+  assert.equal(result.class, CLASSES.UNSTABLE);
+});
