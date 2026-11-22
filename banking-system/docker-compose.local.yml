@@ -22,7 +22,7 @@ services:
         condition: service_started
 
   witness:
-    image: node:18-alpine
+    image: node:22-slim   # Bob CLI (witness/.bob-cli) needs Node 20+
     container_name: banking-witness
     working_dir: /witness
     command: ["node", "server.js"]
@@ -38,6 +38,10 @@ services:
       GUARD_ENABLED: ${GUARD_ENABLED:-}
       APPROVERS: ${APPROVERS:-}
       BOB_ENABLED: ${BOB_ENABLED:-}
+      # Guarded Bob narrates reports only when these are set in the shell that runs `compose up`. The key is never stored in a file.
+      REPORT_NARRATIVE: ${REPORT_NARRATIVE:-}
+      BOB_API_KEY: ${BOB_API_KEY:-}
+      BOB_BIN: ${BOB_BIN:-}
     ports:
       - "127.0.0.1:8081:8080"   # bank API (the backend listens inside this shared namespace)
       - "127.0.0.1:8787:8787"   # witness dashboard/API

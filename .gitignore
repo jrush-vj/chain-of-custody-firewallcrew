@@ -46,3 +46,6 @@ deploy/local/bob/runs/
 
 # Demo videos are not stored in git (see Videos/LINK.md)
 Videos/*.mp4
+
+# Local Bob CLI install for the guarded Bob (npm install in witness/.bob-cli)
+witness/.bob-cli/

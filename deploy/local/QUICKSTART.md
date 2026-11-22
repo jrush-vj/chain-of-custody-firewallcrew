@@ -64,3 +64,20 @@ Keep your Bob API key outside the repo (the lab mounts the whole repo), for exam
 The safer Bob is the guarded one in `witness/guard/` (no tools, an empty workspace, nothing but its own
 key in its environment). It writes a short labelled note for an incident and is enabled with the guard
 settings in `witness/guard/README.md`.
+
+## Optional: the guarded Bob inside the witness
+
+The witness image is `node:22-slim` so it can run the Bob CLI. Install the CLI once, then recreate the witness
+with the guard and Bob switches set in the shell (the key is read from your shell, never from a file in the repo):
+
+```bash
+mkdir -p witness/.bob-cli && docker run --rm -v "$PWD/witness/.bob-cli:/out" -w /out node:22-slim \
+  sh -c 'npm init -y >/dev/null && npm install @ibm/bob@2.1.0'
+export GUARD_ENABLED=1 BOB_ENABLED=1 REPORT_NARRATIVE=bob_on_demand APPROVERS='[{"id":"soc-lead","sha256":"<sha256 of your token>"}]'
+export BOB_BIN=/witness/.bob-cli/node_modules/@ibm/bob/dist/bob.js BOB_API_KEY=your-key-here
+bash deploy/local/test-stack.sh up
+```
+
+On Windows Git Bash also `export MSYS_NO_PATHCONV=1 MSYS2_ENV_CONV_EXCL='*'` first, or `BOB_BIN` gets a `C:/Program Files/Git` prefix.
+Then `POST /guard/incidents/<id>/narrative` with the approver token asks Bob for a labelled note; injected text in the
+evidence is withheld and the dashboard shows a "Guard alert" banner.
