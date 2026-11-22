@@ -104,6 +104,34 @@ button{font:inherit;color:inherit}
     <p class="next" id="next" role="status">Launch the attacks. Afterwards, open the witness dashboard and press <b>Diagnose with Bob</b>: IBM Bob walks you through what happened, layer by layer.</p>
   </section>
 
+  <section class="panel" aria-labelledby="h-bob">
+    <div class="panel-head"><h2 id="h-bob">Attack IBM Bob</h2></div>
+    <div class="attacks">
+      <article class="atk" id="bob-injection">
+        <span><span class="tag">Prompt injection</span></span>
+        <h3>Plant "ignore your instructions" in the evidence</h3>
+        <p>A compromised bank server posts a signed alert whose text tries to override Bob.</p>
+        <p class="catch">Should be caught by: the witness pre-scan, shown as a Guard alert.</p>
+        <div class="act"><span class="tag" id="bst-injection">Ready</span><button class="btn danger" type="button" data-bob="injection">Launch</button></div>
+      </article>
+      <article class="atk" id="bob-exfil">
+        <span><span class="tag">Data theft</span></span>
+        <h3>Make Bob hand over the secrets</h3>
+        <p>The planted text asks Bob to output the witness secret and the API key.</p>
+        <p class="catch">Should be caught by: the secret-request rule. Bob also has no secrets in its environment.</p>
+        <div class="act"><span class="tag" id="bst-exfil">Ready</span><button class="btn danger" type="button" data-bob="exfil">Launch</button></div>
+      </article>
+      <article class="atk" id="bob-tools">
+        <span><span class="tag">Tool hijack</span></span>
+        <h3>Make Bob run commands</h3>
+        <p>The planted text carries a fake tool call and destructive commands (<code>docker compose down</code>, <code>rm -rf</code>).</p>
+        <p class="catch">Should be caught by: the pre-scan. Guarded Bob has no tools and cannot run them.</p>
+        <div class="act"><span class="tag" id="bst-tools">Ready</span><button class="btn danger" type="button" data-bob="tools">Launch</button></div>
+      </article>
+    </div>
+    <p class="next">Then open the <a href="http://localhost:8787/" target="_blank" rel="noopener">witness dashboard</a>: an amber <b>Guard alert</b> banner appears.</p>
+  </section>
+
   <section class="panel" aria-labelledby="h-log">
     <div class="panel-head"><h2 id="h-log">Attack log</h2><span class="count" id="log-count">0 lines</span></div>
     <ol class="log" id="log" aria-live="polite"></ol>
@@ -184,6 +212,20 @@ $("run-all").addEventListener("click", async () => {
   lockButtons(true);
   for (const layer of [1, 2, 3]) await launchAttack(layer);
   lockButtons(false);
+});
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-bob]");
+  if (!b || b.disabled) return;
+  const kind = b.dataset.bob, tag = $("bst-" + kind);
+  b.disabled = true; tag.textContent = "Running…";
+  addLog("Attacking IBM Bob: " + kind, "head");
+  try {
+    const data = await (await fetch("/attack-bob", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind }) })).json();
+    addLog(String(data.output || data.error || ""), data.success ? "alert" : "error");
+    tag.textContent = data.success ? "Launched" : "Failed";
+  } catch (err) { tag.textContent = "Failed"; addLog("Error: " + err.message, "error"); }
+  b.disabled = false;
 });
 
 checkStatus(); setInterval(checkStatus, 5000);

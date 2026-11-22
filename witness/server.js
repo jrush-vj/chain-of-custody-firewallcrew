@@ -9,6 +9,7 @@ import { amountMinor } from './records.js';
 import { evaluateHeartbeat, evidenceMismatches, receiveRows, recordCounts } from './banksync.js';
 import { loadGuardConfig } from './guard/config.js';
 import { createGuard } from './guard/guard.js';
+import { prescan } from './guard/bob/prescan.js';
 
 const port = Number(process.env.WITNESS_PORT || 8787);
 const bindHost = process.env.WITNESS_BIND_HOST || '127.0.0.1';
@@ -795,6 +796,22 @@ export const createWitnessServer = (store, guard = guardConfig.guardEnabled ? cr
           // witness-established evidence (a root attacker holds the shared secret and could forge it).
           origin: 'box'
         });
+        // Guard on: instruction-like text in a box-posted event is flagged now, not only when Bob is later asked
+        // to read it. The text itself is never copied into the warning (rule names, length and the event seq only).
+        if (guard) {
+          const leaves = [['summary', payload.summary], ...Object.entries(payload.detail ?? {}).map(([key, value]) => ['detail.' + key, value])]
+            .filter(([, value]) => typeof value === 'string');
+          const { flags } = prescan(leaves.map(([field, value]) => ({ ref: 'seq ' + record.seq, field, value })));
+          if (flags.length > 0) {
+            const rules = [...new Set(flags.flatMap((flag) => flag.rules))];
+            await store.recordLayerEvent({
+              layer: 3, trigger: 'guard:provenance_warning', state: 'alert',
+              summary: 'guard: instruction-like text in an event from the box (possible attack on Bob)',
+              detail: { source: 'ingest', ref: 'seq ' + record.seq, fields: flags.map((flag) => flag.field).join(','), rules: rules.join(','), chars: String(flags.reduce((sum, flag) => sum + flag.chars, 0)) },
+              who: {}
+            });
+          }
+        }
         return sendJson(response, 200, { status: 'recorded', seq: record.seq });
       }
       if (pathname === '/v1/prepare') {
